@@ -24,6 +24,62 @@ const badgeStyle = (pagado) => ({
   whiteSpace:"nowrap"
 });
 
+function ExpandableTable({ expenses }) {
+  const [expanded, setExpanded] = useState({});
+  if (!expenses.length) return <p style={{fontSize:13,color:"#999"}}>Sin datos.</p>;
+  const months = [...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6);
+  const toggle = (k) => setExpanded(p=>({...p,[k]:!p[k]}));
+  const sumCat = (cat,m) => expenses.filter(e=>e.category===cat&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
+  const sumSub = (sub,m) => expenses.filter(e=>e.subcat===sub&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
+  const grandTotal = (m) => expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
+  return (
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead>
+          <tr style={{borderBottom:"1px solid #eee"}}>
+            <th style={{textAlign:"left",padding:"6px 10px",fontWeight:500,color:"#666",minWidth:140}}>Foco / Concepto</th>
+            {months.map(m=><th key={m} style={{textAlign:"right",padding:"6px 10px",fontWeight:500,color:"#666",whiteSpace:"nowrap"}}>{m.slice(5)}/{m.slice(2,4)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(CATEGORIES).map(([k,v])=>{
+            const subcats = [...new Set(expenses.filter(e=>e.category===k).map(e=>e.subcat))].sort();
+            const rowTotal = months.reduce((s,m)=>s+sumCat(k,m),0);
+            if (!rowTotal) return null;
+            return (
+              <>
+                <tr key={k} onClick={()=>toggle(k)} style={{cursor:"pointer",borderBottom:"1px solid #f0f0f0",background:expanded[k]?"#f9f9f9":"#fff"}}>
+                  <td style={{padding:"8px 10px",fontWeight:500}}>
+                    <span style={{fontSize:15,marginRight:6}}>{v.icon}</span>
+                    <span style={{color:v.color}}>{v.label}</span>
+                    <span style={{marginLeft:6,fontSize:11,color:"#999"}}>{expanded[k]?"▲":"▼"}</span>
+                  </td>
+                  {months.map(m=>{ const tot=sumCat(k,m); return <td key={m} style={{textAlign:"right",padding:"8px 10px",fontWeight:500,color:tot>0?"#1a1a1a":"#ccc"}}>{tot>0?fmt(tot):"—"}</td>; })}
+                </tr>
+                {expanded[k] && subcats.map(sub=>{
+                  const hasData = months.some(m=>sumSub(sub,m)>0);
+                  if (!hasData) return null;
+                  return (
+                    <tr key={sub} style={{borderBottom:"1px solid #f5f5f5",background:"#fafafa"}}>
+                      <td style={{padding:"5px 10px 5px 32px",color:"#666",borderLeft:`2px solid ${v.color}44`,fontSize:12}}>{sub}</td>
+                      {months.map(m=>{ const tot=sumSub(sub,m); return <td key={m} style={{textAlign:"right",padding:"5px 10px",fontSize:12,color:tot>0?"#1a1a1a":"#ddd"}}>{tot>0?fmt(tot):"—"}</td>; })}
+                    </tr>
+                  );
+                })}
+                {expanded[k] && <tr><td colSpan={months.length+1} style={{padding:0,borderBottom:"1px solid #eee"}}></td></tr>}
+              </>
+            );
+          })}
+          <tr style={{borderTop:"1px solid #eee",fontWeight:500}}>
+            <td style={{padding:"8px 10px"}}>Total</td>
+            {months.map(m=><td key={m} style={{textAlign:"right",padding:"8px 10px",color:"#3266ad"}}>{fmt(grandTotal(m))}</td>)}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -556,31 +612,9 @@ export default function App() {
               })}
             </div>
             <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
-              <h3 style={{margin:"0 0 1rem",fontSize:15,fontWeight:500}}>Resumen por mes</h3>
-              {expenses.length===0?<p style={{fontSize:13,color:"#999"}}>Sin datos.</p>
-              :(() => {
-                const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6);
-                return(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead><tr style={{borderBottom:"1px solid #eee"}}>
-                    <th style={{textAlign:"left",padding:"6px 10px",fontWeight:500,color:"#666"}}>Foco</th>
-                    {months.map(m=><th key={m} style={{textAlign:"right",padding:"6px 10px",fontWeight:500,color:"#666"}}>{m.slice(5)}/{m.slice(2,4)}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {Object.entries(CATEGORIES).map(([k,v])=>{
-                      const rowTotal=months.reduce((s,m)=>s+expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0),0);
-                      if(!rowTotal) return null;
-                      return(<tr key={k} style={{borderBottom:"1px solid #f5f5f5"}}>
-                        <td style={{padding:"7px 10px",fontWeight:500}}>{v.icon} {v.label}</td>
-                        {months.map(m=>{ const tot=expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0); return <td key={m} style={{textAlign:"right",padding:"7px 10px",color:tot>0?"#1a1a1a":"#ccc"}}>{tot>0?fmt(tot):"—"}</td>; })}
-                      </tr>);
-                    })}
-                    <tr style={{borderTop:"1px solid #eee",fontWeight:500}}>
-                      <td style={{padding:"7px 10px"}}>Total</td>
-                      {months.map(m=>{ const tot=expenses.filter(e=>e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0); return <td key={m} style={{textAlign:"right",padding:"7px 10px",color:"#3266ad"}}>{fmt(tot)}</td>; })}
-                    </tr>
-                  </tbody>
-                </table></div>);
-              })()}
+              <h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:500}}>Resumen por mes</h3>
+              <p style={{fontSize:12,color:"#999",margin:"0 0 1rem"}}>Hacé clic en un foco para ver el detalle</p>
+              <ExpandableTable expenses={expenses} />
             </div>
           </div>
         </div>
