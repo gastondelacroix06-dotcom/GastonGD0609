@@ -88,7 +88,7 @@ export default function App() {
 
   const loadExpenses = async () => {
     setLoadingData(true);
-    const { data, error } = await supabase.from("gastos").select("*").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("gastos").select("*").order("id", { ascending: false });
     if (!error && data) {
       setExpenses(data.map(e => ({
         id: String(e.id), category: e.category, subcat: e.subcat,
