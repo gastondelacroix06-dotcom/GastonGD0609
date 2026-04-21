@@ -4,7 +4,7 @@ import { supabase } from "./supabase.js";
 const CATEGORIES = {
   hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Impuesto Provincial","Seguro Hogar","Vigilancia","Monitoreo de Puerta","Otros"] },
   autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Polo - Seguro","VW Polo - Combustible","VW Polo - Mecánico","VW Polo - Service","VW Gol - Seguro","VW Gol - Combustible","VW Gol - Mecánico","VW Gol - Service"] },
-  hijos: { label:"Hijos", icon:"👦", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
+  hijos: { label:"Hijos", icon:"🧑‍🧑‍🧒‍🧒", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
 };
 const MEDIOS = ["Débito automático","Transferencia","Efectivo","Tarjeta de crédito"];
 const MONTHS_FULL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -23,7 +23,7 @@ const badgeStyle = (pagado) => ({
   whiteSpace:"nowrap"
 });
 
-function Login({ onLogin }) {
+function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -70,7 +70,9 @@ export default function App() {
   const [filterPagado, setFilterPagado] = useState("all");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
+  const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef();
+  const importRef = useRef();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -82,9 +84,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (session) loadExpenses();
-  }, [session]);
+  useEffect(() => { if (session) loadExpenses(); }, [session]);
 
   const loadExpenses = async () => {
     setLoadingData(true);
@@ -93,11 +93,35 @@ export default function App() {
       setExpenses(data.map(e => ({
         id: String(e.id), category: e.category, subcat: e.subcat,
         amount: e.amount, date: e.date, dueDate: e.due_date,
-        desc: e.desc, medio: e.medio, pagado: e.pagado,
+        desc: e.descripcion, medio: e.medio, pagado: e.pagado,
         recurring: e.recurring, fileName: e.file_name
       })));
     }
     setLoadingData(false);
+  };
+
+  const handleImportCSV = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setImportMsg("Importando...");
+    const text = await f.text();
+    const lines = text.split("\n").filter(l => l.trim());
+    const rows = lines.slice(1).map(line => {
+      const cols = line.split(",").map(c => c.replace(/^"|"$/g,"").trim());
+      return {
+        category: cols[1]==="Hogar"?"hogar":cols[1]==="Autos"?"autos":"hijos",
+        subcat: cols[2], descripcion: cols[3],
+        amount: parseFloat(cols[4])||0,
+        date: cols[5]?.includes("/")?cols[5].split("/").reverse().join("-"):cols[5],
+        due_date: cols[6]?.includes("/")?cols[6].split("/").reverse().join("-"):(cols[6]||null),
+        medio: cols[7], pagado: cols[8]==="Pagado",
+        recurring: cols[9]==="Sí", file_name: cols[10]||""
+      };
+    }).filter(r => r.subcat && r.amount);
+    const { error } = await supabase.from("gastos").insert(rows);
+    if (error) { setImportMsg("Error al importar: " + error.message); }
+    else { setImportMsg(`✓ ${rows.length} gastos importados`); loadExpenses(); }
+    setTimeout(() => setImportMsg(""), 4000);
   };
 
   const togglePagado = async (id) => {
@@ -106,9 +130,7 @@ export default function App() {
     setExpenses(p => p.map(x => x.id === id ? {...x, pagado: !x.pagado} : x));
   };
 
-  const wakeBackend = async () => {
-    try { await fetch(`${API_URL}/`); } catch {}
-  };
+  const wakeBackend = async () => { try { await fetch(`${API_URL}/`); } catch {} };
 
   const handleFile = async (e) => {
     const f = e.target.files[0];
@@ -123,7 +145,7 @@ export default function App() {
         let parsed = null;
         for (let intento = 1; intento <= 3; intento++) {
           try {
-            setAiResult(`Analizando archivo... (intento ${intento}/3)`);
+            setAiResult(`Analizando... (intento ${intento}/3)`);
             const resp = await fetch(`${API_URL}/api/analyze`, {
               method:"POST", headers:{"Content-Type":"application/json"},
               body: JSON.stringify({ base64: b64, mediaType: f.type }),
@@ -150,7 +172,7 @@ export default function App() {
     if (!form.amount || !form.date) return;
     const row = {
       category: form.category, subcat: form.subcat, amount: parseFloat(form.amount),
-      date: form.date, due_date: form.dueDate || null, desc: form.desc,
+      date: form.date, due_date: form.dueDate || null, descripcion: form.desc,
       medio: form.medio, pagado: form.pagado, recurring: form.recurring, file_name: form.fileName
     };
     if (editId) {
@@ -224,7 +246,10 @@ export default function App() {
           <h1 style={{fontSize:22,fontWeight:500,margin:0}}>Gastos del Hogar</h1>
           <p style={{fontSize:12,color:"#666",margin:"2px 0 0"}}>{session.user.email}</p>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <input ref={importRef} type="file" accept=".csv" onChange={handleImportCSV} style={{display:"none"}}/>
+          <button onClick={()=>importRef.current.click()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>↑ Importar CSV</button>
+          {importMsg && <span style={{fontSize:12,color:importMsg.startsWith("✓")?"#1d9e75":"#e24b4a",alignSelf:"center"}}>{importMsg}</span>}
           <button onClick={exportExcel} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>↓ Excel</button>
           <button onClick={()=>supabase.auth.signOut()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>Salir</button>
           <button onClick={()=>{setShowForm(true);setEditId(null);setAiResult("");setForm({category:"hogar",subcat:"Luz",amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false});}} style={{fontSize:13,padding:"6px 14px",background:"#3266ad",border:"none",borderRadius:8,cursor:"pointer",color:"#fff",fontWeight:500}}>+ Nuevo Gasto</button>
