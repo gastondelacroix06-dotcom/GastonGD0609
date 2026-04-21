@@ -180,7 +180,7 @@ function CategoryEditor({ categories, onClose, onSave }) {
 
 function Dashboard({ expenses, categories }) {
   const [dashTab, setDashTab] = useState("resumen");
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth()+1);
+  const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth()+1));
   const isYearView = selectedMonth === "all";
   const [selectedYear] = useState(new Date().getFullYear());
   const [selectedConcepto, setSelectedConcepto] = useState("");
@@ -248,9 +248,9 @@ function Dashboard({ expenses, categories }) {
         <div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
             <span style={{fontSize:14,fontWeight:500}}>{isYearView?"Período":"Mes"} a analizar</span>
-            <select value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value==="all"?"all":parseInt(e.target.value))} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+            <select value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
               <option value="all">Año {selectedYear}</option>
-              {MONTHS_FULL.map((m,i)=><option key={i} value={i+1}>{m} {selectedYear}</option>)}
+              {MONTHS_FULL.map((m,i)=><option key={i} value={String(i+1)}>{m} {selectedYear}</option>)}
             </select>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:"1rem"}}>
@@ -271,7 +271,7 @@ function Dashboard({ expenses, categories }) {
               const total=cats.reduce((s,e)=>s+e.amount,0);
               const bySub={};
               cats.forEach(e=>{bySub[e.subcat]=(bySub[e.subcat]||0)+e.amount;});
-              const top=Object.entries(bySub).sort(([,a],[,b])=>b-a).slice(0,3);
+              const top=Object.entries(bySub).sort(([,a],[,b])=>b-a);
               return(
                 <div key={k} style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1rem"}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
