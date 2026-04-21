@@ -30,16 +30,22 @@ function exportCSV(rows, filename) {
   const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename+".csv"; a.click();
 }
 
-async function exportPDF(title, columns, rows, filename) {
+async function exportPDF(title, filename, elementId) {
   const { jsPDF } = await import("jspdf");
-  const autoTable = (await import("jspdf-autotable")).default;
-  const doc = new jsPDF({ orientation: rows[0]?.length > 6 ? "landscape" : "portrait" });
-  doc.setFontSize(16); doc.setFont("helvetica","bold");
-  doc.text(title, 14, 18);
-  doc.setFontSize(10); doc.setFont("helvetica","normal");
-  doc.text(`Generado: ${new Date().toLocaleDateString("es-AR")}`, 14, 26);
-  autoTable(doc, { head:[columns], body:rows, startY:32, styles:{fontSize:9}, headStyles:{fillColor:[50,102,173],textColor:255,fontStyle:"bold"}, alternateRowStyles:{fillColor:[245,247,250]} });
-  doc.save(filename+".pdf");
+  const html2canvas = (await import("html2canvas")).default;
+  const el = elementId ? document.getElementById(elementId) : document.body;
+  if (!el) return;
+  const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+  const imgW = canvas.width / 2;
+  const imgH = canvas.height / 2;
+  const pdf = new jsPDF({ orientation: imgW > imgH ? "landscape" : "portrait", unit: "px", format: [imgW + 40, imgH + 60] });
+  pdf.setFontSize(13); pdf.setFont("helvetica","bold");
+  pdf.text(title, 20, 22);
+  pdf.setFontSize(9); pdf.setFont("helvetica","normal");
+  pdf.text(new Date().toLocaleDateString("es-AR"), 20, 36);
+  pdf.addImage(imgData, "PNG", 20, 44, imgW, imgH);
+  pdf.save(filename+".pdf");
+  const imgData = canvas.toDataURL("image/png");
 }
 
 function ExportButtons({ onCSV, onPDF }) {
@@ -180,51 +186,12 @@ function Dashboard({ expenses, categories }) {
   const maxVal=conceptoData.length?Math.max(...conceptoData):0;
   const minVal=nonZero.length?Math.min(...nonZero):0;
 
-  const exportDashboardCSV = () => {
-    const label = isYearView ? `Año ${selectedYear}` : `${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`;
-    const rows = [["Foco","Categoría","Monto","Estado"]];
-    monthExp.forEach(e=>rows.push([categories[e.category]?.label||e.category, e.subcat, fmtRaw(e.amount), e.pagado?"Pagado":"Pendiente"]));
-    rows.push(["","Total",fmtRaw(totalMes),""]);
-    exportCSV(rows, `dashboard_${label.replace(/\s/g,"_")}`);
-  };
-
-  const exportDashboardPDF = async () => {
-    const label = isYearView ? `Año ${selectedYear}` : `${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`;
-    const rows = monthExp.map(e=>[categories[e.category]?.label||e.category, e.subcat, fmt(e.amount), e.pagado?"✓ Pagado":"● Pendiente"]);
-    rows.push(["","Total", fmt(totalMes), ""]);
-    await exportPDF(`Dashboard — ${label}`, ["Foco","Categoría","Monto","Estado"], rows, `dashboard_${label.replace(/\s/g,"_")}`);
-  };
-
-  const exportComparadorCSV = () => {
-    const rows = [["Mes", selectedConcepto]];
-    months.forEach((m,i)=>rows.push([m, fmtRaw(conceptoData[i]||0)]));
-    exportCSV(rows, `comparador_${selectedConcepto.replace(/\s/g,"_")}`);
-  };
-
-  const exportComparadorPDF = async () => {
-    const rows = months.map((m,i)=>[m, fmt(conceptoData[i]||0)]);
-    await exportPDF(`Comparador — ${selectedConcepto}`, ["Mes","Monto"], rows, `comparador_${selectedConcepto.replace(/\s/g,"_")}`);
-  };
-
-  const exportEvolucionCSV = () => {
-    const rows = [["Mes", ...Object.values(categories).map(v=>v.label), "Total"]];
-    months.forEach(m=>{
-      const catTotals = Object.keys(categories).map(k=>fmtRaw(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0)));
-      const total = fmtRaw(expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0));
-      rows.push([m,...catTotals,total]);
-    });
-    exportCSV(rows, `evolucion_${selectedYear}`);
-  };
-
-  const exportEvolucionPDF = async () => {
-    const cols = ["Mes", ...Object.values(categories).map(v=>v.label), "Total"];
-    const rows = months.map(m=>{
-      const catTotals = Object.keys(categories).map(k=>fmt(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0)));
-      const total = fmt(expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0));
-      return [m,...catTotals,total];
-    });
-    await exportPDF(`Evolución anual ${selectedYear}`, cols, rows, `evolucion_${selectedYear}`);
-  };
+  const exportDashboardCSV=()=>{ const label=isYearView?`Año ${selectedYear}`:`${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`; const rows=[["Foco","Categoría","Monto","Estado"]]; monthExp.forEach(e=>rows.push([categories[e.category]?.label||e.category,e.subcat,fmtRaw(e.amount),e.pagado?"Pagado":"Pendiente"])); rows.push(["","Total",fmtRaw(totalMes),""]); exportCSV(rows,`dashboard_${label.replace(/\s/g,"_")}`); };
+  const exportDashboardPDF=async()=>{ const label=isYearView?`Año ${selectedYear}`:`${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`; await exportPDF(`Dashboard — ${label}`,`dashboard_${label.replace(/\s/g,"_")}`,"section-dashboard"); };
+  const exportComparadorCSV=()=>{ const rows=[["Mes",selectedConcepto]]; months.forEach((m,i)=>rows.push([m,fmtRaw(conceptoData[i]||0)])); exportCSV(rows,`comparador_${selectedConcepto.replace(/\s/g,"_")}`); };
+  const exportComparadorPDF=async()=>{ await exportPDF(`Comparador — ${selectedConcepto}`,`comparador_${selectedConcepto.replace(/\s/g,"_")}`,"section-comparador"); };
+  const exportEvolucionCSV=()=>{ const rows=[["Mes",...Object.values(categories).map(v=>v.label),"Total"]]; months.forEach(m=>{ const catTotals=Object.keys(categories).map(k=>fmtRaw(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0))); const total=fmtRaw(expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0)); rows.push([m,...catTotals,total]); }); exportCSV(rows,`evolucion_${selectedYear}`); };
+  const exportEvolucionPDF=async()=>{ await exportPDF(`Evolución anual ${selectedYear}`,`evolucion_${selectedYear}`,"section-evolucion"); };
 
   useEffect(()=>{
     if(dashTab!=="resumen"||!chart1Ref.current) return;
@@ -264,7 +231,7 @@ function Dashboard({ expenses, categories }) {
       </div>
 
       {dashTab==="resumen"&&(
-        <div>
+        <div id="section-dashboard">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <span style={{fontSize:14,fontWeight:500}}>{isYearView?"Período":"Mes"} a analizar</span>
@@ -319,7 +286,7 @@ function Dashboard({ expenses, categories }) {
       )}
 
       {dashTab==="comparador"&&(
-        <div>
+        <div id="section-comparador">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <span style={{fontSize:13,color:"#666"}}>Concepto:</span>
@@ -353,7 +320,7 @@ function Dashboard({ expenses, categories }) {
       )}
 
       {dashTab==="evolucion"&&(
-        <div>
+        <div id="section-evolucion">
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
             <ExportButtons onCSV={exportEvolucionCSV} onPDF={exportEvolucionPDF}/>
           </div>
@@ -413,62 +380,36 @@ export default function App() {
   const [importMsg,setImportMsg]=useState("");
   const fileRef=useRef(); const importRef=useRef();
 
-  useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setLoadingSession(false);});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,session)=>setSession(session));
-    return()=>subscription.unsubscribe();
-  },[]);
-
+  useEffect(()=>{ supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setLoadingSession(false);}); const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,session)=>setSession(session)); return()=>subscription.unsubscribe(); },[]);
   useEffect(()=>{ if(session){loadExpenses();loadCategories();} },[session]);
-
-  useEffect(()=>{
-    if(tab==="Dashboard"||tab==="Análisis"){
-      if(!window.Chart){ const s=document.createElement("script"); s.src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"; s.async=true; document.head.appendChild(s); }
-    }
-  },[tab]);
+  useEffect(()=>{ if(tab==="Dashboard"||tab==="Análisis"){ if(!window.Chart){ const s=document.createElement("script"); s.src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"; s.async=true; document.head.appendChild(s); } } },[tab]);
 
   const loadExpenses=async()=>{ setLoadingData(true); const {data,error}=await supabase.from("gastos").select("*").order("id",{ascending:false}); if(!error&&data) setExpenses(data.map(e=>({id:String(e.id),category:e.category,subcat:e.subcat,amount:e.amount,date:e.date,dueDate:e.due_date,desc:e.descripcion,medio:e.medio,pagado:e.pagado,recurring:e.recurring,fileName:e.file_name}))); setLoadingData(false); };
-
   const loadCategories=async()=>{ const {data}=await supabase.from("categorias").select("*"); if(data&&data.length){ const cats={}; data.forEach(r=>{ if(!cats[r.foco]) cats[r.foco]={label:r.foco_label,icon:r.foco_icon,color:r.foco_color,subcats:[]}; cats[r.foco].subcats.push(r.subcat); }); setCategories({...DEFAULT_CATEGORIES,...cats}); } };
-
   const handleImportCSV=async(e)=>{ const f=e.target.files[0]; if(!f) return; setImportMsg("Importando..."); const text=await f.text(); const lines=text.split("\n").filter(l=>l.trim()); const rows=lines.slice(1).map(line=>{ const cols=line.split(",").map(c=>c.replace(/^"|"$/g,"").trim()); const pd=d=>d?.includes("/")?d.split("/").reverse().join("-"):d; return{category:cols[1]==="Hogar"?"hogar":cols[1]==="Autos"?"autos":"hijos",subcat:cols[2],descripcion:cols[3],amount:parseFloat(cols[4])||0,date:pd(cols[5]),due_date:pd(cols[6])||null,medio:cols[7],pagado:cols[8]==="Pagado",recurring:cols[9]==="Sí",file_name:cols[10]||""}; }).filter(r=>r.subcat&&r.amount); const{error}=await supabase.from("gastos").insert(rows); if(error) setImportMsg("Error: "+error.message); else{setImportMsg(`✓ ${rows.length} gastos importados`);loadExpenses();} setTimeout(()=>setImportMsg(""),4000); e.target.value=""; };
-
   const togglePagado=async(id)=>{ const e=expenses.find(x=>x.id===id); await supabase.from("gastos").update({pagado:!e.pagado}).eq("id",id); setExpenses(p=>p.map(x=>x.id===id?{...x,pagado:!x.pagado}:x)); };
-
   const wakeBackend=async()=>{ try{await fetch(`${API_URL}/`);}catch{} };
-
   const handleFile=async(e)=>{ const f=e.target.files[0]; if(!f) return; setForm(p=>({...p,fileName:f.name})); if(f.type==="application/pdf"||f.type.startsWith("image/")){ setAiLoading(true); setAiResult("Despertando servidor..."); await wakeBackend(); setAiResult("Analizando archivo con IA..."); try{ const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);}); let parsed=null; for(let i=1;i<=3;i++){ try{ setAiResult(`Analizando... (intento ${i}/3)`); const resp=await fetch(`${API_URL}/api/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base64:b64,mediaType:f.type}),signal:AbortSignal.timeout(60000)}); parsed=await resp.json(); break; }catch{if(i<3) await new Promise(r=>setTimeout(r,3000));} } if(parsed&&!parsed.error){ setAiResult("✓ "+(parsed.descripcion||"Archivo procesado")); setForm(prev=>({...prev,amount:parsed.monto?String(parsed.monto):prev.amount,date:parsed.fecha||prev.date,dueDate:parsed.vencimiento||prev.dueDate,desc:parsed.descripcion||prev.desc,subcat:parsed.categoria_sugerida||prev.subcat,category:parsed.foco_sugerido||prev.category})); }else setAiResult("No se pudo extraer datos. Completá manualmente."); }catch{setAiResult("Error procesando el archivo.");} setAiLoading(false); } };
-
   const handleSubmit=async()=>{ if(!form.amount||!form.date) return; const row={category:form.category,subcat:form.subcat,amount:parseFloat(form.amount),date:form.date,due_date:form.dueDate||null,descripcion:form.desc,medio:form.medio,pagado:form.pagado,recurring:form.recurring,file_name:form.fileName}; if(editId){ await supabase.from("gastos").update(row).eq("id",editId); setExpenses(p=>p.map(e=>e.id===editId?{...form,id:editId,amount:parseFloat(form.amount)}:e)); setEditId(null); }else{ const{data}=await supabase.from("gastos").insert(row).select(); if(data?.[0]) setExpenses(p=>[{...form,id:String(data[0].id),amount:parseFloat(form.amount)},...p]); } setForm({category:Object.keys(categories)[0],subcat:Object.values(categories)[0].subcats[0]||"",amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false}); setAiResult(""); setShowForm(false); };
-
   const del=async(id)=>{ await supabase.from("gastos").delete().eq("id",id); setExpenses(p=>p.filter(e=>e.id!==id)); };
   const edit=(e)=>{ setForm({...e,amount:String(e.amount)}); setEditId(e.id); setShowForm(true); };
-
   const filtered=expenses.filter(e=>{ const mc=filterCat==="all"||e.category===filterCat; const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`); const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado); const ms=filterSubcat==="all"||e.subcat===filterSubcat; return mc&&mm&&mp&&ms; });
-
   const exportGastosCSV=()=>{ const rows=[["ID","Foco","Subcategoría","Descripción","Monto","Fecha","Vencimiento","Medio de Pago","Estado","Recurrente"]]; filtered.forEach(e=>rows.push([e.id,categories[e.category]?.label,e.subcat,e.desc,fmtRaw(e.amount),e.date,e.dueDate,e.medio,e.pagado?"Pagado":"Pendiente",e.recurring?"Sí":"No"])); exportCSV(rows,"gastos_hogar"); };
-
-  const exportGastosPDF=async()=>{ const rows=filtered.map(e=>[categories[e.category]?.label,e.subcat,e.desc||"",fmt(e.amount),e.date,e.pagado?"✓":"●"]); await exportPDF("Listado de Gastos",["Foco","Categoría","Descripción","Monto","Fecha","Estado"],rows,"gastos_hogar"); };
-
+  const exportGastosPDF=async()=>{ await exportPDF("Listado de Gastos","gastos_hogar","section-gastos"); };
   const exportAnalisisCSV=()=>{ const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const rows=[["Foco",...months]]; Object.entries(categories).forEach(([k,v])=>{ const rowTotal=months.reduce((s,m)=>s+expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0),0); if(rowTotal) rows.push([v.label,...months.map(m=>fmtRaw(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0)))]); }); exportCSV(rows,"analisis_hogar"); };
-
-  const exportAnalisisPDF=async()=>{ const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const cols=["Foco",...months]; const rows=Object.entries(categories).map(([k,v])=>[v.label,...months.map(m=>fmt(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0)))]); await exportPDF("Análisis por Mes",cols,rows,"analisis_hogar"); };
-
+  const exportAnalisisPDF=async()=>{ await exportPDF("Análisis de Gastos","analisis_hogar","section-analisis"); };
   const getDueDates=()=>{ const result={}; expenses.forEach(e=>{ const d=e.dueDate||e.date; if(!d) return; const eYear=parseInt(d.slice(0,4)),eMonth=parseInt(d.slice(5,7))-1; if(eYear!==calYear||eMonth!==calMonth) return; if(!result[d]) result[d]=[]; result[d].push(e); }); return result; };
-
   const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
   const firstDay=new Date(calYear,calMonth,1).getDay();
   const dueDates=getDueDates();
 
   if(loadingSession) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontSize:14,color:"#666"}}>Cargando...</div>;
   if(!session) return <Login/>;
-
   const firstCat=Object.keys(categories)[0];
 
   return(
     <div style={{fontFamily:"system-ui,sans-serif",maxWidth:960,margin:"0 auto",padding:"1rem",color:"#1a1a1a"}}>
       {showCatEditor&&<CategoryEditor categories={categories} onClose={()=>setShowCatEditor(false)} onSave={cats=>setCategories(cats)}/>}
-
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem",flexWrap:"wrap",gap:8}}>
         <div>
           <h1 style={{fontSize:22,fontWeight:500,margin:0}}>Gastos del Hogar</h1>
@@ -526,7 +467,7 @@ export default function App() {
       {tab==="Dashboard"&&<Dashboard expenses={expenses} categories={categories}/>}
 
       {tab==="Gastos"&&(
-        <div>
+        <div id="section-gastos">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
@@ -615,7 +556,7 @@ export default function App() {
       )}
 
       {tab==="Análisis"&&(
-        <div>
+        <div id="section-analisis">
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
             <ExportButtons onCSV={exportAnalisisCSV} onPDF={exportAnalisisPDF}/>
           </div>
