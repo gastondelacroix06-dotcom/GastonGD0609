@@ -181,6 +181,7 @@ function CategoryEditor({ categories, onClose, onSave }) {
 function Dashboard({ expenses, categories }) {
   const [dashTab, setDashTab] = useState("resumen");
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth()+1);
+  const isYearView = selectedMonth === "all";
   const [selectedYear] = useState(new Date().getFullYear());
   const [selectedConcepto, setSelectedConcepto] = useState("");
   const chart1Ref=useRef(null); const chart2Ref=useRef(null); const chart3Ref=useRef(null);
@@ -190,7 +191,9 @@ function Dashboard({ expenses, categories }) {
   useEffect(()=>{ if(allSubcats.length&&!selectedConcepto) setSelectedConcepto(allSubcats[0]); },[expenses]);
 
   const monthStr=`${selectedYear}-${String(selectedMonth).padStart(2,"0")}`;
-  const monthExp=expenses.filter(e=>e.date?.startsWith(monthStr));
+  const monthExp=isYearView
+    ? expenses.filter(e=>e.date?.startsWith(String(selectedYear)))
+    : expenses.filter(e=>e.date?.startsWith(monthStr));
   const totalMes=monthExp.reduce((s,e)=>s+e.amount,0);
   const pagadoMes=monthExp.filter(e=>e.pagado).reduce((s,e)=>s+e.amount,0);
   const pendienteMes=totalMes-pagadoMes;
@@ -244,13 +247,18 @@ function Dashboard({ expenses, categories }) {
       {dashTab==="resumen"&&(
         <div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
-            <span style={{fontSize:14,fontWeight:500}}>Mes a analizar</span>
-            <select value={selectedMonth} onChange={e=>setSelectedMonth(parseInt(e.target.value))} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+            <span style={{fontSize:14,fontWeight:500}}>{isYearView?"Período":"Mes"} a analizar</span>
+            <select value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value==="all"?"all":parseInt(e.target.value))} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+              <option value="all">Año {selectedYear}</option>
               {MONTHS_FULL.map((m,i)=><option key={i} value={i+1}>{m} {selectedYear}</option>)}
             </select>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:"1rem"}}>
-            {[["Total del mes",totalMes,"#3266ad"],["Pagado",pagadoMes,"#1d9e75"],["Pendiente",pendienteMes,"#e24b4a"]].map(([l,v,c])=>(
+            {[
+              [isYearView?"Total anual":"Total del mes", totalMes,"#3266ad"],
+              [isYearView?"Total pagado":"Pagado", pagadoMes,"#1d9e75"],
+              [isYearView?"Total pendiente":"Pendiente", pendienteMes,"#e24b4a"]
+            ].map(([l,v,c])=>(
               <div key={l} style={{background:"#f9f9f9",borderRadius:8,padding:"1rem",textAlign:"center"}}>
                 <p style={{fontSize:11,color:"#666",margin:"0 0 4px"}}>{l}</p>
                 <p style={{fontSize:18,fontWeight:500,margin:0,color:c}}>{fmt(v)}</p>
