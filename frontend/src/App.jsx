@@ -13,6 +13,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 function fmt(n) { return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(n||0); }
 function fmtK(v) { if(v>=1000000) return '$'+(v/1000000).toFixed(1)+'M'; if(v>=1000) return '$'+(v/1000).toFixed(0)+'k'; return '$'+Math.round(v); }
+function fmtRaw(n) { return Math.round(n||0).toLocaleString('es-AR'); }
 
 const badgeStyle = (pagado) => ({
   display:"inline-flex", alignItems:"center", gap:4, fontSize:11,
@@ -23,6 +24,33 @@ const badgeStyle = (pagado) => ({
   whiteSpace:"nowrap"
 });
 
+function exportCSV(rows, filename) {
+  const csv = rows.map(r=>r.map(c=>`"${c||""}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename+".csv"; a.click();
+}
+
+async function exportPDF(title, columns, rows, filename) {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+  const doc = new jsPDF({ orientation: rows[0]?.length > 6 ? "landscape" : "portrait" });
+  doc.setFontSize(16); doc.setFont("helvetica","bold");
+  doc.text(title, 14, 18);
+  doc.setFontSize(10); doc.setFont("helvetica","normal");
+  doc.text(`Generado: ${new Date().toLocaleDateString("es-AR")}`, 14, 26);
+  autoTable(doc, { head:[columns], body:rows, startY:32, styles:{fontSize:9}, headStyles:{fillColor:[50,102,173],textColor:255,fontStyle:"bold"}, alternateRowStyles:{fillColor:[245,247,250]} });
+  doc.save(filename+".pdf");
+}
+
+function ExportButtons({ onCSV, onPDF }) {
+  return (
+    <div style={{display:"flex",gap:6}}>
+      <button onClick={onCSV} style={{fontSize:12,padding:"4px 12px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer",color:"#1a1a1a"}}>↓ Excel</button>
+      <button onClick={onPDF} style={{fontSize:12,padding:"4px 12px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer",color:"#1a1a1a"}}>↓ PDF</button>
+    </div>
+  );
+}
+
 function ExpandableTable({ expenses }) {
   const [expanded, setExpanded] = useState({});
   if (!expenses.length) return <p style={{fontSize:13,color:"#999"}}>Sin datos.</p>;
@@ -31,7 +59,6 @@ function ExpandableTable({ expenses }) {
   const sumCat = (cat,m) => expenses.filter(e=>e.category===cat&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
   const sumSub = (sub,m) => expenses.filter(e=>e.subcat===sub&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
   const grandTotal = (m) => expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0);
-  const cats = {...DEFAULT_CATEGORIES};
   return (
     <div style={{overflowX:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
@@ -42,7 +69,7 @@ function ExpandableTable({ expenses }) {
           </tr>
         </thead>
         <tbody>
-          {Object.entries(cats).map(([k,v])=>{
+          {Object.entries(DEFAULT_CATEGORIES).map(([k,v])=>{
             const subcats=[...new Set(expenses.filter(e=>e.category===k).map(e=>e.subcat))].sort();
             const rowTotal=months.reduce((s,m)=>s+sumCat(k,m),0);
             if(!rowTotal) return null;
@@ -81,67 +108,25 @@ function ExpandableTable({ expenses }) {
 }
 
 function CategoryEditor({ categories, onClose, onSave }) {
-  const [cats, setCats] = useState(JSON.parse(JSON.stringify(categories)));
-  const [newFocoKey, setNewFocoKey] = useState("");
-  const [newFocoLabel, setNewFocoLabel] = useState("");
-  const [newFocoIcon, setNewFocoIcon] = useState("📦");
-  const [newFocoColor, setNewFocoColor] = useState("#3266ad");
-  const [newSubcats, setNewSubcats] = useState({});
-  const [saving, setSaving] = useState(false);
-
-  const addFoco = () => {
-    if (!newFocoLabel.trim()) return;
-    const key = newFocoLabel.toLowerCase().replace(/\s+/g,"-").replace(/[^a-z0-9-]/g,"");
-    if (cats[key]) return;
-    setCats(p=>({...p,[key]:{label:newFocoLabel,icon:newFocoIcon,color:newFocoColor,subcats:[]}}));
-    setNewFocoKey(""); setNewFocoLabel(""); setNewFocoIcon("📦"); setNewFocoColor("#3266ad");
-  };
-
-  const addSubcat = (foco) => {
-    const val = (newSubcats[foco]||"").trim();
-    if (!val) return;
-    setCats(p=>({...p,[foco]:{...p[foco],subcats:[...p[foco].subcats,val]}}));
-    setNewSubcats(p=>({...p,[foco]:""}));
-  };
-
-  const removeSubcat = (foco, sub) => setCats(p=>({...p,[foco]:{...p[foco],subcats:p[foco].subcats.filter(s=>s!==sub)}}));
-
-  const handleSave = async () => {
-    setSaving(true);
-    await supabase.from("categorias").delete().neq("id",0);
-    const rows = [];
-    Object.entries(cats).forEach(([foco,v])=>{
-      v.subcats.forEach(sub=>{
-        rows.push({foco,foco_label:v.label,foco_icon:v.icon,foco_color:v.color,subcat:sub});
-      });
-    });
-    if (rows.length) await supabase.from("categorias").insert(rows);
-    onSave(cats);
-    setSaving(false);
-    onClose();
-  };
-
-  return (
+  const [cats,setCats]=useState(JSON.parse(JSON.stringify(categories)));
+  const [newFocoLabel,setNewFocoLabel]=useState(""); const [newFocoIcon,setNewFocoIcon]=useState("📦"); const [newFocoColor,setNewFocoColor]=useState("#3266ad");
+  const [newSubcats,setNewSubcats]=useState({}); const [saving,setSaving]=useState(false);
+  const addFoco=()=>{ if(!newFocoLabel.trim()) return; const key=newFocoLabel.toLowerCase().replace(/\s+/g,"-").replace(/[^a-z0-9-]/g,""); if(cats[key]) return; setCats(p=>({...p,[key]:{label:newFocoLabel,icon:newFocoIcon,color:newFocoColor,subcats:[]}})); setNewFocoLabel(""); setNewFocoIcon("📦"); setNewFocoColor("#3266ad"); };
+  const addSubcat=(foco)=>{ const val=(newSubcats[foco]||"").trim(); if(!val) return; setCats(p=>({...p,[foco]:{...p[foco],subcats:[...p[foco].subcats,val]}})); setNewSubcats(p=>({...p,[foco]:""})); };
+  const removeSubcat=(foco,sub)=>setCats(p=>({...p,[foco]:{...p[foco],subcats:p[foco].subcats.filter(s=>s!==sub)}}));
+  const handleSave=async()=>{ setSaving(true); await supabase.from("categorias").delete().neq("id",0); const rows=[]; Object.entries(cats).forEach(([foco,v])=>{ v.subcats.forEach(sub=>{ rows.push({foco,foco_label:v.label,foco_icon:v.icon,foco_color:v.color,subcat:sub}); }); }); if(rows.length) await supabase.from("categorias").insert(rows); onSave(cats); setSaving(false); onClose(); };
+  return(
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
       <div style={{background:"#fff",borderRadius:16,padding:"1.5rem",width:"100%",maxWidth:600,maxHeight:"85vh",overflowY:"auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem"}}>
           <h3 style={{margin:0,fontSize:17,fontWeight:500}}>Editar focos y categorías</h3>
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#999"}}>✕</button>
         </div>
-
         {Object.entries(cats).map(([foco,v])=>(
           <div key={foco} style={{marginBottom:"1.25rem",background:"#f9f9f9",borderRadius:10,padding:"1rem"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-              <span style={{fontSize:20}}>{v.icon}</span>
-              <span style={{fontWeight:500,fontSize:15,color:v.color}}>{v.label}</span>
-            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><span style={{fontSize:20}}>{v.icon}</span><span style={{fontWeight:500,fontSize:15,color:v.color}}>{v.label}</span></div>
             <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
-              {v.subcats.map(sub=>(
-                <span key={sub} style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:12,padding:"3px 10px",borderRadius:20,background:v.color+"22",color:v.color}}>
-                  {sub}
-                  <span onClick={()=>removeSubcat(foco,sub)} style={{cursor:"pointer",fontWeight:700,fontSize:14,lineHeight:1}}>×</span>
-                </span>
-              ))}
+              {v.subcats.map(sub=>(<span key={sub} style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:12,padding:"3px 10px",borderRadius:20,background:v.color+"22",color:v.color}}>{sub}<span onClick={()=>removeSubcat(foco,sub)} style={{cursor:"pointer",fontWeight:700,fontSize:14,lineHeight:1}}>×</span></span>))}
             </div>
             <div style={{display:"flex",gap:6}}>
               <input value={newSubcats[foco]||""} onChange={e=>setNewSubcats(p=>({...p,[foco]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubcat(foco)} placeholder="Nueva categoría..." style={{flex:1,padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}/>
@@ -149,26 +134,15 @@ function CategoryEditor({ categories, onClose, onSave }) {
             </div>
           </div>
         ))}
-
         <div style={{background:"#f0f4ff",borderRadius:10,padding:"1rem",marginBottom:"1rem"}}>
           <p style={{fontSize:13,fontWeight:500,margin:"0 0 10px",color:"#3266ad"}}>+ Nuevo foco</p>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-            <div>
-              <label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Nombre</label>
-              <input value={newFocoLabel} onChange={e=>setNewFocoLabel(e.target.value)} placeholder="Ej: Mascotas" style={{width:"100%",padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13,boxSizing:"border-box"}}/>
-            </div>
-            <div>
-              <label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Ícono</label>
-              <input value={newFocoIcon} onChange={e=>setNewFocoIcon(e.target.value)} placeholder="🐶" style={{width:"100%",padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13,boxSizing:"border-box"}}/>
-            </div>
-            <div>
-              <label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Color</label>
-              <input type="color" value={newFocoColor} onChange={e=>setNewFocoColor(e.target.value)} style={{width:"100%",height:34,padding:"2px",borderRadius:8,border:"1px solid #ddd",cursor:"pointer"}}/>
-            </div>
+            <div><label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Nombre</label><input value={newFocoLabel} onChange={e=>setNewFocoLabel(e.target.value)} placeholder="Ej: Mascotas" style={{width:"100%",padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13,boxSizing:"border-box"}}/></div>
+            <div><label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Ícono</label><input value={newFocoIcon} onChange={e=>setNewFocoIcon(e.target.value)} placeholder="🐶" style={{width:"100%",padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13,boxSizing:"border-box"}}/></div>
+            <div><label style={{fontSize:11,color:"#666",display:"block",marginBottom:3}}>Color</label><input type="color" value={newFocoColor} onChange={e=>setNewFocoColor(e.target.value)} style={{width:"100%",height:34,padding:"2px",borderRadius:8,border:"1px solid #ddd",cursor:"pointer"}}/></div>
           </div>
           <button onClick={addFoco} style={{padding:"7px 16px",background:"#3266ad",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:500}}>Crear foco</button>
         </div>
-
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <button onClick={onClose} style={{padding:"8px 16px",background:"none",border:"1px solid #ddd",borderRadius:8,cursor:"pointer",fontSize:14,color:"#666"}}>Cancelar</button>
           <button onClick={handleSave} disabled={saving} style={{padding:"8px 20px",background:"#3266ad",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500}}>{saving?"Guardando...":"Guardar cambios"}</button>
@@ -181,17 +155,17 @@ function CategoryEditor({ categories, onClose, onSave }) {
 function Dashboard({ expenses, categories }) {
   const [dashTab, setDashTab] = useState("resumen");
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth()+1));
-  const isYearView = selectedMonth === "all";
   const [selectedYear] = useState(new Date().getFullYear());
   const [selectedConcepto, setSelectedConcepto] = useState("");
   const chart1Ref=useRef(null); const chart2Ref=useRef(null); const chart3Ref=useRef(null);
   const c1=useRef(null); const c2=useRef(null); const c3=useRef(null);
+  const isYearView = selectedMonth === "all";
 
   const allSubcats=[...new Set(expenses.map(e=>e.subcat))].sort();
   useEffect(()=>{ if(allSubcats.length&&!selectedConcepto) setSelectedConcepto(allSubcats[0]); },[expenses]);
 
   const monthStr=`${selectedYear}-${String(selectedMonth).padStart(2,"0")}`;
-  const monthExp=isYearView
+  const monthExp = isYearView
     ? expenses.filter(e=>e.date?.startsWith(String(selectedYear)))
     : expenses.filter(e=>e.date?.startsWith(monthStr));
   const totalMes=monthExp.reduce((s,e)=>s+e.amount,0);
@@ -206,10 +180,55 @@ function Dashboard({ expenses, categories }) {
   const maxVal=conceptoData.length?Math.max(...conceptoData):0;
   const minVal=nonZero.length?Math.min(...nonZero):0;
 
+  const exportDashboardCSV = () => {
+    const label = isYearView ? `Año ${selectedYear}` : `${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`;
+    const rows = [["Foco","Categoría","Monto","Estado"]];
+    monthExp.forEach(e=>rows.push([categories[e.category]?.label||e.category, e.subcat, fmtRaw(e.amount), e.pagado?"Pagado":"Pendiente"]));
+    rows.push(["","Total",fmtRaw(totalMes),""]);
+    exportCSV(rows, `dashboard_${label.replace(/\s/g,"_")}`);
+  };
+
+  const exportDashboardPDF = async () => {
+    const label = isYearView ? `Año ${selectedYear}` : `${MONTHS_FULL[parseInt(selectedMonth)-1]} ${selectedYear}`;
+    const rows = monthExp.map(e=>[categories[e.category]?.label||e.category, e.subcat, fmt(e.amount), e.pagado?"✓ Pagado":"● Pendiente"]);
+    rows.push(["","Total", fmt(totalMes), ""]);
+    await exportPDF(`Dashboard — ${label}`, ["Foco","Categoría","Monto","Estado"], rows, `dashboard_${label.replace(/\s/g,"_")}`);
+  };
+
+  const exportComparadorCSV = () => {
+    const rows = [["Mes", selectedConcepto]];
+    months.forEach((m,i)=>rows.push([m, fmtRaw(conceptoData[i]||0)]));
+    exportCSV(rows, `comparador_${selectedConcepto.replace(/\s/g,"_")}`);
+  };
+
+  const exportComparadorPDF = async () => {
+    const rows = months.map((m,i)=>[m, fmt(conceptoData[i]||0)]);
+    await exportPDF(`Comparador — ${selectedConcepto}`, ["Mes","Monto"], rows, `comparador_${selectedConcepto.replace(/\s/g,"_")}`);
+  };
+
+  const exportEvolucionCSV = () => {
+    const rows = [["Mes", ...Object.values(categories).map(v=>v.label), "Total"]];
+    months.forEach(m=>{
+      const catTotals = Object.keys(categories).map(k=>fmtRaw(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0)));
+      const total = fmtRaw(expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0));
+      rows.push([m,...catTotals,total]);
+    });
+    exportCSV(rows, `evolucion_${selectedYear}`);
+  };
+
+  const exportEvolucionPDF = async () => {
+    const cols = ["Mes", ...Object.values(categories).map(v=>v.label), "Total"];
+    const rows = months.map(m=>{
+      const catTotals = Object.keys(categories).map(k=>fmt(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0)));
+      const total = fmt(expenses.filter(e=>e.date?.startsWith(m)).reduce((s,e)=>s+e.amount,0));
+      return [m,...catTotals,total];
+    });
+    await exportPDF(`Evolución anual ${selectedYear}`, cols, rows, `evolucion_${selectedYear}`);
+  };
+
   useEffect(()=>{
     if(dashTab!=="resumen"||!chart1Ref.current) return;
     if(c1.current) c1.current.destroy();
-    const th=totalByCat("hogar"),ta=totalByCat("autos"),ti=totalByCat("hijos");
     const catLabels=Object.values(categories).map(v=>v.label);
     const catData=Object.keys(categories).map(k=>monthExp.filter(e=>e.category===k).reduce((s,e)=>s+e.amount,0));
     const catColors=Object.values(categories).map(v=>v.color);
@@ -247,18 +266,17 @@ function Dashboard({ expenses, categories }) {
       {dashTab==="resumen"&&(
         <div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
-            <span style={{fontSize:14,fontWeight:500}}>{isYearView?"Período":"Mes"} a analizar</span>
-            <select value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              <option value="all">Año {selectedYear}</option>
-              {MONTHS_FULL.map((m,i)=><option key={i} value={String(i+1)}>{m} {selectedYear}</option>)}
-            </select>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:14,fontWeight:500}}>{isYearView?"Período":"Mes"} a analizar</span>
+              <select value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                <option value="all">Año {selectedYear}</option>
+                {MONTHS_FULL.map((m,i)=><option key={i} value={String(i+1)}>{m} {selectedYear}</option>)}
+              </select>
+            </div>
+            <ExportButtons onCSV={exportDashboardCSV} onPDF={exportDashboardPDF}/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:"1rem"}}>
-            {[
-              [isYearView?"Total anual":"Total del mes", totalMes,"#3266ad"],
-              [isYearView?"Total pagado":"Pagado", pagadoMes,"#1d9e75"],
-              [isYearView?"Total pendiente":"Pendiente", pendienteMes,"#e24b4a"]
-            ].map(([l,v,c])=>(
+            {[[isYearView?"Total anual":"Total del mes",totalMes,"#3266ad"],[isYearView?"Total pagado":"Pagado",pagadoMes,"#1d9e75"],[isYearView?"Total pendiente":"Pendiente",pendienteMes,"#e24b4a"]].map(([l,v,c])=>(
               <div key={l} style={{background:"#f9f9f9",borderRadius:8,padding:"1rem",textAlign:"center"}}>
                 <p style={{fontSize:11,color:"#666",margin:"0 0 4px"}}>{l}</p>
                 <p style={{fontSize:18,fontWeight:500,margin:0,color:c}}>{fmt(v)}</p>
@@ -302,11 +320,14 @@ function Dashboard({ expenses, categories }) {
 
       {dashTab==="comparador"&&(
         <div>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:"1rem",flexWrap:"wrap"}}>
-            <span style={{fontSize:13,color:"#666"}}>Concepto:</span>
-            <select value={selectedConcepto} onChange={e=>setSelectedConcepto(e.target.value)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              {allSubcats.map(s=><option key={s}>{s}</option>)}
-            </select>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:13,color:"#666"}}>Concepto:</span>
+              <select value={selectedConcepto} onChange={e=>setSelectedConcepto(e.target.value)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                {allSubcats.map(s=><option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <ExportButtons onCSV={exportComparadorCSV} onPDF={exportComparadorPDF}/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:"1rem"}}>
             {[["Promedio",fmt(avg),"#3266ad"],["Máximo",fmt(maxVal),"#e24b4a"],["Mínimo",fmt(minVal),"#1d9e75"],["Meses c/dato",nonZero.length+" / "+months.length,"#888"]].map(([l,v,c])=>(
@@ -333,6 +354,9 @@ function Dashboard({ expenses, categories }) {
 
       {dashTab==="evolucion"&&(
         <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
+            <ExportButtons onCSV={exportEvolucionCSV} onPDF={exportEvolucionPDF}/>
+          </div>
           <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem",marginBottom:"1rem"}}>
             <p style={{fontSize:14,fontWeight:500,margin:"0 0 4px"}}>Gastos totales por mes — {selectedYear}</p>
             <div style={{display:"flex",gap:16,margin:"6px 0 10px",fontSize:12,color:"#666"}}>
@@ -380,8 +404,7 @@ export default function App() {
   const [tab,setTab]=useState("Dashboard"); const [expenses,setExpenses]=useState([]);
   const [categories,setCategories]=useState(DEFAULT_CATEGORIES);
   const [loadingData,setLoadingData]=useState(false); const [showForm,setShowForm]=useState(false);
-  const [showCatEditor,setShowCatEditor]=useState(false);
-  const [editId,setEditId]=useState(null);
+  const [showCatEditor,setShowCatEditor]=useState(false); const [editId,setEditId]=useState(null);
   const [form,setForm]=useState({category:"hogar",subcat:"Luz",amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false});
   const [calMonth,setCalMonth]=useState(new Date().getMonth()); const [calYear,setCalYear]=useState(new Date().getFullYear());
   const [filterCat,setFilterCat]=useState("all"); const [filterMonth,setFilterMonth]=useState("all");
@@ -404,97 +427,34 @@ export default function App() {
     }
   },[tab]);
 
-  const loadExpenses=async()=>{
-    setLoadingData(true);
-    const {data,error}=await supabase.from("gastos").select("*").order("id",{ascending:false});
-    if(!error&&data) setExpenses(data.map(e=>({id:String(e.id),category:e.category,subcat:e.subcat,amount:e.amount,date:e.date,dueDate:e.due_date,desc:e.descripcion,medio:e.medio,pagado:e.pagado,recurring:e.recurring,fileName:e.file_name})));
-    setLoadingData(false);
-  };
+  const loadExpenses=async()=>{ setLoadingData(true); const {data,error}=await supabase.from("gastos").select("*").order("id",{ascending:false}); if(!error&&data) setExpenses(data.map(e=>({id:String(e.id),category:e.category,subcat:e.subcat,amount:e.amount,date:e.date,dueDate:e.due_date,desc:e.descripcion,medio:e.medio,pagado:e.pagado,recurring:e.recurring,fileName:e.file_name}))); setLoadingData(false); };
 
-  const loadCategories=async()=>{
-    const {data}=await supabase.from("categorias").select("*");
-    if(data&&data.length){
-      const cats={};
-      data.forEach(r=>{
-        if(!cats[r.foco]) cats[r.foco]={label:r.foco_label,icon:r.foco_icon,color:r.foco_color,subcats:[]};
-        cats[r.foco].subcats.push(r.subcat);
-      });
-      setCategories({...DEFAULT_CATEGORIES,...cats});
-    }
-  };
+  const loadCategories=async()=>{ const {data}=await supabase.from("categorias").select("*"); if(data&&data.length){ const cats={}; data.forEach(r=>{ if(!cats[r.foco]) cats[r.foco]={label:r.foco_label,icon:r.foco_icon,color:r.foco_color,subcats:[]}; cats[r.foco].subcats.push(r.subcat); }); setCategories({...DEFAULT_CATEGORIES,...cats}); } };
 
-  const handleImportCSV=async(e)=>{
-    const f=e.target.files[0]; if(!f) return;
-    setImportMsg("Importando...");
-    const text=await f.text();
-    const lines=text.split("\n").filter(l=>l.trim());
-    const rows=lines.slice(1).map(line=>{
-      const cols=line.split(",").map(c=>c.replace(/^"|"$/g,"").trim());
-      const pd=d=>d?.includes("/")?d.split("/").reverse().join("-"):d;
-      return{category:cols[1]==="Hogar"?"hogar":cols[1]==="Autos"?"autos":"hijos",subcat:cols[2],descripcion:cols[3],amount:parseFloat(cols[4])||0,date:pd(cols[5]),due_date:pd(cols[6])||null,medio:cols[7],pagado:cols[8]==="Pagado",recurring:cols[9]==="Sí",file_name:cols[10]||""};
-    }).filter(r=>r.subcat&&r.amount);
-    const{error}=await supabase.from("gastos").insert(rows);
-    if(error) setImportMsg("Error: "+error.message);
-    else{setImportMsg(`✓ ${rows.length} gastos importados`);loadExpenses();}
-    setTimeout(()=>setImportMsg(""),4000); e.target.value="";
-  };
+  const handleImportCSV=async(e)=>{ const f=e.target.files[0]; if(!f) return; setImportMsg("Importando..."); const text=await f.text(); const lines=text.split("\n").filter(l=>l.trim()); const rows=lines.slice(1).map(line=>{ const cols=line.split(",").map(c=>c.replace(/^"|"$/g,"").trim()); const pd=d=>d?.includes("/")?d.split("/").reverse().join("-"):d; return{category:cols[1]==="Hogar"?"hogar":cols[1]==="Autos"?"autos":"hijos",subcat:cols[2],descripcion:cols[3],amount:parseFloat(cols[4])||0,date:pd(cols[5]),due_date:pd(cols[6])||null,medio:cols[7],pagado:cols[8]==="Pagado",recurring:cols[9]==="Sí",file_name:cols[10]||""}; }).filter(r=>r.subcat&&r.amount); const{error}=await supabase.from("gastos").insert(rows); if(error) setImportMsg("Error: "+error.message); else{setImportMsg(`✓ ${rows.length} gastos importados`);loadExpenses();} setTimeout(()=>setImportMsg(""),4000); e.target.value=""; };
 
   const togglePagado=async(id)=>{ const e=expenses.find(x=>x.id===id); await supabase.from("gastos").update({pagado:!e.pagado}).eq("id",id); setExpenses(p=>p.map(x=>x.id===id?{...x,pagado:!x.pagado}:x)); };
 
   const wakeBackend=async()=>{ try{await fetch(`${API_URL}/`);}catch{} };
 
-  const handleFile=async(e)=>{
-    const f=e.target.files[0]; if(!f) return;
-    setForm(p=>({...p,fileName:f.name}));
-    if(f.type==="application/pdf"||f.type.startsWith("image/")){
-      setAiLoading(true); setAiResult("Despertando servidor..."); await wakeBackend(); setAiResult("Analizando archivo con IA...");
-      try{
-        const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
-        let parsed=null;
-        for(let i=1;i<=3;i++){
-          try{ setAiResult(`Analizando... (intento ${i}/3)`); const resp=await fetch(`${API_URL}/api/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base64:b64,mediaType:f.type}),signal:AbortSignal.timeout(60000)}); parsed=await resp.json(); break; }
-          catch{if(i<3) await new Promise(r=>setTimeout(r,3000));}
-        }
-        if(parsed&&!parsed.error){ setAiResult("✓ "+(parsed.descripcion||"Archivo procesado")); setForm(prev=>({...prev,amount:parsed.monto?String(parsed.monto):prev.amount,date:parsed.fecha||prev.date,dueDate:parsed.vencimiento||prev.dueDate,desc:parsed.descripcion||prev.desc,subcat:parsed.categoria_sugerida||prev.subcat,category:parsed.foco_sugerido||prev.category})); }
-        else setAiResult("No se pudo extraer datos. Completá manualmente.");
-      }catch{setAiResult("Error procesando el archivo.");}
-      setAiLoading(false);
-    }
-  };
+  const handleFile=async(e)=>{ const f=e.target.files[0]; if(!f) return; setForm(p=>({...p,fileName:f.name})); if(f.type==="application/pdf"||f.type.startsWith("image/")){ setAiLoading(true); setAiResult("Despertando servidor..."); await wakeBackend(); setAiResult("Analizando archivo con IA..."); try{ const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);}); let parsed=null; for(let i=1;i<=3;i++){ try{ setAiResult(`Analizando... (intento ${i}/3)`); const resp=await fetch(`${API_URL}/api/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base64:b64,mediaType:f.type}),signal:AbortSignal.timeout(60000)}); parsed=await resp.json(); break; }catch{if(i<3) await new Promise(r=>setTimeout(r,3000));} } if(parsed&&!parsed.error){ setAiResult("✓ "+(parsed.descripcion||"Archivo procesado")); setForm(prev=>({...prev,amount:parsed.monto?String(parsed.monto):prev.amount,date:parsed.fecha||prev.date,dueDate:parsed.vencimiento||prev.dueDate,desc:parsed.descripcion||prev.desc,subcat:parsed.categoria_sugerida||prev.subcat,category:parsed.foco_sugerido||prev.category})); }else setAiResult("No se pudo extraer datos. Completá manualmente."); }catch{setAiResult("Error procesando el archivo.");} setAiLoading(false); } };
 
-  const handleSubmit=async()=>{
-    if(!form.amount||!form.date) return;
-    const row={category:form.category,subcat:form.subcat,amount:parseFloat(form.amount),date:form.date,due_date:form.dueDate||null,descripcion:form.desc,medio:form.medio,pagado:form.pagado,recurring:form.recurring,file_name:form.fileName};
-    if(editId){ await supabase.from("gastos").update(row).eq("id",editId); setExpenses(p=>p.map(e=>e.id===editId?{...form,id:editId,amount:parseFloat(form.amount)}:e)); setEditId(null); }
-    else{ const{data}=await supabase.from("gastos").insert(row).select(); if(data?.[0]) setExpenses(p=>[{...form,id:String(data[0].id),amount:parseFloat(form.amount)},...p]); }
-    setForm({category:Object.keys(categories)[0],subcat:Object.values(categories)[0].subcats[0],amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false});
-    setAiResult(""); setShowForm(false);
-  };
+  const handleSubmit=async()=>{ if(!form.amount||!form.date) return; const row={category:form.category,subcat:form.subcat,amount:parseFloat(form.amount),date:form.date,due_date:form.dueDate||null,descripcion:form.desc,medio:form.medio,pagado:form.pagado,recurring:form.recurring,file_name:form.fileName}; if(editId){ await supabase.from("gastos").update(row).eq("id",editId); setExpenses(p=>p.map(e=>e.id===editId?{...form,id:editId,amount:parseFloat(form.amount)}:e)); setEditId(null); }else{ const{data}=await supabase.from("gastos").insert(row).select(); if(data?.[0]) setExpenses(p=>[{...form,id:String(data[0].id),amount:parseFloat(form.amount)},...p]); } setForm({category:Object.keys(categories)[0],subcat:Object.values(categories)[0].subcats[0]||"",amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false}); setAiResult(""); setShowForm(false); };
 
   const del=async(id)=>{ await supabase.from("gastos").delete().eq("id",id); setExpenses(p=>p.filter(e=>e.id!==id)); };
   const edit=(e)=>{ setForm({...e,amount:String(e.amount)}); setEditId(e.id); setShowForm(true); };
 
-  const filtered=expenses.filter(e=>{
-    const mc=filterCat==="all"||e.category===filterCat;
-    const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`);
-    const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado);
-    const ms=filterSubcat==="all"||e.subcat===filterSubcat;
-    return mc&&mm&&mp&&ms;
-  });
+  const filtered=expenses.filter(e=>{ const mc=filterCat==="all"||e.category===filterCat; const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`); const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado); const ms=filterSubcat==="all"||e.subcat===filterSubcat; return mc&&mm&&mp&&ms; });
 
-  const exportExcel=()=>{
-    const rows=[["ID","Foco","Subcategoría","Descripción","Monto","Fecha","Vencimiento","Medio de Pago","Estado","Recurrente"]];
-    expenses.forEach(e=>rows.push([e.id,categories[e.category]?.label,e.subcat,e.desc,e.amount,e.date,e.dueDate,e.medio,e.pagado?"Pagado":"Pendiente",e.recurring?"Sí":"No"]));
-    const csv=rows.map(r=>r.map(c=>`"${c||""}"`).join(",")).join("\n");
-    const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="gastos_hogar.csv"; a.click();
-  };
+  const exportGastosCSV=()=>{ const rows=[["ID","Foco","Subcategoría","Descripción","Monto","Fecha","Vencimiento","Medio de Pago","Estado","Recurrente"]]; filtered.forEach(e=>rows.push([e.id,categories[e.category]?.label,e.subcat,e.desc,fmtRaw(e.amount),e.date,e.dueDate,e.medio,e.pagado?"Pagado":"Pendiente",e.recurring?"Sí":"No"])); exportCSV(rows,"gastos_hogar"); };
 
-  const getDueDates=()=>{
-    const result={};
-    expenses.forEach(e=>{ const d=e.dueDate||e.date; if(!d) return; const eYear=parseInt(d.slice(0,4)),eMonth=parseInt(d.slice(5,7))-1; if(eYear!==calYear||eMonth!==calMonth) return; if(!result[d]) result[d]=[]; result[d].push(e); });
-    return result;
-  };
+  const exportGastosPDF=async()=>{ const rows=filtered.map(e=>[categories[e.category]?.label,e.subcat,e.desc||"",fmt(e.amount),e.date,e.pagado?"✓":"●"]); await exportPDF("Listado de Gastos",["Foco","Categoría","Descripción","Monto","Fecha","Estado"],rows,"gastos_hogar"); };
+
+  const exportAnalisisCSV=()=>{ const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const rows=[["Foco",...months]]; Object.entries(categories).forEach(([k,v])=>{ const rowTotal=months.reduce((s,m)=>s+expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0),0); if(rowTotal) rows.push([v.label,...months.map(m=>fmtRaw(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0)))]); }); exportCSV(rows,"analisis_hogar"); };
+
+  const exportAnalisisPDF=async()=>{ const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const cols=["Foco",...months]; const rows=Object.entries(categories).map(([k,v])=>[v.label,...months.map(m=>fmt(expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((a,b)=>a+b.amount,0)))]); await exportPDF("Análisis por Mes",cols,rows,"analisis_hogar"); };
+
+  const getDueDates=()=>{ const result={}; expenses.forEach(e=>{ const d=e.dueDate||e.date; if(!d) return; const eYear=parseInt(d.slice(0,4)),eMonth=parseInt(d.slice(5,7))-1; if(eYear!==calYear||eMonth!==calMonth) return; if(!result[d]) result[d]=[]; result[d].push(e); }); return result; };
 
   const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
   const firstDay=new Date(calYear,calMonth,1).getDay();
@@ -507,7 +467,7 @@ export default function App() {
 
   return(
     <div style={{fontFamily:"system-ui,sans-serif",maxWidth:960,margin:"0 auto",padding:"1rem",color:"#1a1a1a"}}>
-      {showCatEditor&&<CategoryEditor categories={categories} onClose={()=>setShowCatEditor(false)} onSave={cats=>{setCategories(cats);}}/>}
+      {showCatEditor&&<CategoryEditor categories={categories} onClose={()=>setShowCatEditor(false)} onSave={cats=>setCategories(cats)}/>}
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem",flexWrap:"wrap",gap:8}}>
         <div>
@@ -518,7 +478,6 @@ export default function App() {
           <input ref={importRef} type="file" accept=".csv" onChange={handleImportCSV} style={{display:"none"}}/>
           <button onClick={()=>importRef.current.click()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>↑ CSV</button>
           {importMsg&&<span style={{fontSize:12,color:importMsg.startsWith("✓")?"#1d9e75":"#e24b4a",alignSelf:"center"}}>{importMsg}</span>}
-          <button onClick={exportExcel} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>↓ Excel</button>
           <button onClick={()=>supabase.auth.signOut()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>Salir</button>
           <button onClick={()=>{setShowForm(true);setEditId(null);setAiResult("");setForm({category:firstCat,subcat:categories[firstCat]?.subcats[0]||"",amount:"",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false});}} style={{fontSize:13,padding:"6px 14px",background:"#3266ad",border:"none",borderRadius:8,cursor:"pointer",color:"#fff",fontWeight:500}}>+ Nuevo Gasto</button>
         </div>
@@ -568,24 +527,27 @@ export default function App() {
 
       {tab==="Gastos"&&(
         <div>
-          <div style={{display:"flex",gap:8,marginBottom:"1rem",flexWrap:"wrap"}}>
-            <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              <option value="all">Todos los focos</option>
-              {Object.entries(categories).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-            </select>
-            <select value={filterMonth} onChange={e=>setFilterMonth(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              <option value="all">Todos los meses</option>
-              {MONTHS_FULL.map((m,i)=><option key={i} value={i+1}>{m}</option>)}
-            </select>
-            <select value={filterPagado} onChange={e=>setFilterPagado(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              <option value="all">Todos los estados</option>
-              <option value="pagado">Solo pagados</option>
-              <option value="pendiente">Solo pendientes</option>
-            </select>
-            <select value={filterSubcat} onChange={e=>setFilterSubcat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
-              <option value="all">Todas las categorías</option>
-              {[...new Set(expenses.map(e=>e.subcat))].sort().map(s=><option key={s}>{s}</option>)}
-            </select>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                <option value="all">Todos los focos</option>
+                {Object.entries(categories).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+              </select>
+              <select value={filterMonth} onChange={e=>setFilterMonth(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                <option value="all">Todos los meses</option>
+                {MONTHS_FULL.map((m,i)=><option key={i} value={i+1}>{m}</option>)}
+              </select>
+              <select value={filterPagado} onChange={e=>setFilterPagado(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                <option value="all">Todos los estados</option>
+                <option value="pagado">Solo pagados</option>
+                <option value="pendiente">Solo pendientes</option>
+              </select>
+              <select value={filterSubcat} onChange={e=>setFilterSubcat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+                <option value="all">Todas las categorías</option>
+                {[...new Set(expenses.map(e=>e.subcat))].sort().map(s=><option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <ExportButtons onCSV={exportGastosCSV} onPDF={exportGastosPDF}/>
           </div>
           {loadingData?<p style={{textAlign:"center",color:"#999",fontSize:14}}>Cargando...</p>
           :filtered.length===0?<div style={{textAlign:"center",padding:"3rem",color:"#999",fontSize:14}}>No hay gastos que coincidan.</div>
@@ -654,6 +616,9 @@ export default function App() {
 
       {tab==="Análisis"&&(
         <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
+            <ExportButtons onCSV={exportAnalisisCSV} onPDF={exportAnalisisPDF}/>
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
             <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
               <h3 style={{margin:"0 0 1rem",fontSize:15,fontWeight:500}}>Distribución por foco</h3>
