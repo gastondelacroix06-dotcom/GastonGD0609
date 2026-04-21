@@ -36,6 +36,7 @@ async function exportPDF(title, filename, elementId) {
   const el = elementId ? document.getElementById(elementId) : document.body;
   if (!el) return;
   const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+  const imgData = canvas.toDataURL("image/png");
   const imgW = canvas.width / 2;
   const imgH = canvas.height / 2;
   const pdf = new jsPDF({ orientation: imgW > imgH ? "landscape" : "portrait", unit: "px", format: [imgW + 40, imgH + 60] });
@@ -45,7 +46,6 @@ async function exportPDF(title, filename, elementId) {
   pdf.text(new Date().toLocaleDateString("es-AR"), 20, 36);
   pdf.addImage(imgData, "PNG", 20, 44, imgW, imgH);
   pdf.save(filename+".pdf");
-  const imgData = canvas.toDataURL("image/png");
 }
 
 function ExportButtons({ onCSV, onPDF }) {
