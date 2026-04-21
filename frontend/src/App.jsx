@@ -259,6 +259,7 @@ export default function App() {
   const [filterCat, setFilterCat] = useState("all");
   const [filterMonth, setFilterMonth] = useState("all");
   const [filterPagado, setFilterPagado] = useState("all");
+  const [filterSubcat, setFilterSubcat] = useState("all");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [importMsg, setImportMsg] = useState("");
@@ -363,7 +364,8 @@ export default function App() {
     const mc=filterCat==="all"||e.category===filterCat;
     const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`);
     const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado);
-    return mc&&mm&&mp;
+    const ms = filterSubcat==="all"||e.subcat===filterSubcat;
+    return mc&&mm&&mp&&ms;
   });
 
   const exportExcel = () => {
@@ -464,6 +466,10 @@ export default function App() {
               <option value="all">Todos los estados</option>
               <option value="pagado">Solo pagados</option>
               <option value="pendiente">Solo pendientes</option>
+            </select>
+            <select value={filterSubcat} onChange={e=>setFilterSubcat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}>
+              <option value="all">Todas las categorías</option>
+              {[...new Set(expenses.map(e=>e.subcat))].sort().map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
           {loadingData?<p style={{textAlign:"center",color:"#999",fontSize:14}}>Cargando...</p>
