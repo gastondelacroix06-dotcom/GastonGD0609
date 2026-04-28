@@ -6,7 +6,7 @@ const DEFAULT_CATEGORIES = {
   autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Polo - Seguro","VW Polo - Combustible","VW Polo - Mecánico","VW Polo - Service","VW Gol - Seguro","VW Gol - Combustible","VW Gol - Mecánico","VW Gol - Service"] },
   hijos: { label:"Hijos", icon:"🧑‍🧑‍🧒‍🧒", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
 };
-const MEDIOS = ["Débito automático","Transferencia","Efectivo","Tarjeta de crédito"];
+const MEDIOS = ["Débito automático","Transferencia","Efectivo","VISA ICBC","VISA Santader","Amex Santader"];
 const MONTHS_FULL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const TABS = ["Dashboard","Gastos","Calendario","Análisis"];
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
