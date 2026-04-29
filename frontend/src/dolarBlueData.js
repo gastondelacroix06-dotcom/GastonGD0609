@@ -623,3 +623,50 @@ export function getLatestBlueDate() {
   const dates = Object.keys(BLUE_HISTORY).sort();
   return dates.length ? dates[dates.length - 1] : null;
 }
+
+/**
+ * Mergea datos externos (de Supabase o de un CSV cargado) al histórico en memoria.
+ * Los datos externos tienen prioridad sobre el hardcoded.
+ * @param {Array<{fecha: string, valor: number}>} rows - Array de {fecha: "YYYY-MM-DD", valor: número}
+ */
+export function mergeBlueData(rows) {
+  rows.forEach(({ fecha, valor }) => {
+    if (fecha && valor) BLUE_HISTORY[fecha] = Number(valor);
+  });
+}
+
+/**
+ * Parsea un CSV con formato "Weekday Mon DD YYYY,valor" o "YYYY-MM-DD,valor"
+ * Devuelve array de {fecha, valor} listo para mergeBlueData / Supabase.
+ */
+export function parseBlueCSV(text) {
+  const MONTHS = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+  const results = [];
+  const lines = text.split('\n');
+  // Saltar encabezado si existe
+  const start = lines[0]?.toLowerCase().includes('category') || lines[0]?.toLowerCase().includes('fecha') ? 1 : 0;
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const [dateStr, valStr] = line.split(',');
+    if (!dateStr || !valStr) continue;
+    const val = parseInt(valStr.trim(), 10);
+    if (!val || isNaN(val)) continue;
+    // Formato "YYYY-MM-DD"
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) {
+      results.push({ fecha: dateStr.trim(), valor: val });
+      continue;
+    }
+    // Formato "Fri Apr 28 2023"
+    const parts = dateStr.trim().split(' ').filter(Boolean);
+    if (parts.length === 4) {
+      const [, mon, day, year] = parts;
+      const m = MONTHS[mon];
+      if (m !== undefined) {
+        const fecha = `${year}-${String(m + 1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        results.push({ fecha, valor: val });
+      }
+    }
+  }
+  return results;
+}
