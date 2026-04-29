@@ -13,6 +13,7 @@ const DEFAULT_CATEGORIES = {
 
 const DEFAULT_INCOME_CATEGORIES = ["Sueldo","Freelance / Honorarios","Alquiler cobrado","Dividendos","Venta de activos","Bono","Otros ingresos"];
 const BASE_MEDIOS = ["Débito automático","Transferencia","Efectivo","VISA ICBC","VISA Santander","Amex Santander"];
+const MEDIOS_TARJETA = ["VISA ICBC","VISA Santander","Amex Santander"]; // medios que NO impactan Ahorros hasta el pago
 const MONTHS_FULL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const TABS = ["Dashboard","Gastos","Ingresos","Calendario","Análisis","Ahorros"];
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -240,6 +241,41 @@ function CategoryEditor({ categories, onClose, onSave }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── SELECTOR DE CUENTA ORIGEN (para gastos no-tarjeta) ─────────────────────────
+
+function CuentaOrigenSelector({ value, onChange, moneda, date, tcManual, onTcChange, amount }) {
+  const [cuentas, setCuentas] = useState([]);
+  useEffect(() => {
+    supabase.from("cuentas").select("id,nombre,tipo,saldo_inicial").order("orden")
+      .then(({ data }) => { if (data) setCuentas(data); });
+  }, []);
+
+  const tc = parseFloat(tcManual) || getBlueRate(date) || getLatestBlueRate() || 1;
+  const monto_usd = amount && moneda === "ARS" ? parseFloat(amount) / tc : parseFloat(amount) || 0;
+
+  return (
+    <>
+      <div style={{gridColumn:"1/-1",background:"#f0faf5",border:"1px solid #1d9e7533",borderRadius:10,padding:"12px 14px"}}>
+        <p style={{fontSize:12,fontWeight:500,color:"#0f6e56",margin:"0 0 10px"}}>💸 Este gasto descuenta de una cuenta — ¿de cuál sale?</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Cuenta origen (opcional)</label>
+            <select value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:14,boxSizing:"border-box"}}>
+              <option value="">— No descontar de ninguna cuenta —</option>
+              {cuentas.map(c=><option key={c.id} value={c.id}>{c.tipo==="tarjeta"?"💳":"🏦"} {c.nombre}</option>)}
+            </select>
+          </div>
+          {moneda==="ARS"&&value&&(
+            <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>TC utilizado (editable)</label>
+              <input type="number" value={tcManual} onChange={e=>onTcChange(e.target.value)} placeholder={String(getBlueRate(date)||getLatestBlueRate()||"")} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #3266ad",fontSize:14,background:"#f0f4ff",boxSizing:"border-box"}}/>
+              {amount&&<p style={{fontSize:11,color:"#999",margin:"3px 0 0"}}>≈ {fmtUSD(monto_usd)} que se descontarán de la cuenta</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -698,7 +734,7 @@ export default function App() {
   const [showForm,setShowForm]=useState(false);
   const [showCatEditor,setShowCatEditor]=useState(false);
   const [editId,setEditId]=useState(null);
-  const [form,setForm]=useState({category:"hogar",subcat:"Luz",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false});
+  const [form,setForm]=useState({category:"hogar",subcat:"Luz",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:"Transferencia",pagado:false,cuenta_origen_id:"",tipo_cambio_manual:""});
   const [calMonth,setCalMonth]=useState(new Date().getMonth()); const [calYear,setCalYear]=useState(new Date().getFullYear());
   const [filterCat,setFilterCat]=useState("all"); const [filterMonth,setFilterMonth]=useState("all");
   const [filterPagado,setFilterPagado]=useState("all"); const [filterSubcat,setFilterSubcat]=useState("all");
@@ -723,7 +759,40 @@ export default function App() {
   const togglePagado=async(id)=>{ const e=expenses.find(x=>x.id===id); await supabase.from("gastos").update({pagado:!e.pagado}).eq("id",id); setExpenses(p=>p.map(x=>x.id===id?{...x,pagado:!x.pagado}:x)); };
   const wakeBackend=async()=>{ try{await fetch(`${API_URL}/`);}catch{} };
   const handleFile=async(e)=>{ const f=e.target.files[0]; if(!f) return; setForm(p=>({...p,fileName:f.name})); if(f.type==="application/pdf"||f.type.startsWith("image/")){setAiLoading(true);setAiResult("Despertando servidor...");await wakeBackend();setAiResult("Analizando archivo con IA...");try{const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);}); let parsed=null; for(let i=1;i<=3;i++){try{setAiResult(`Analizando... (intento ${i}/3)`);const resp=await fetch(`${API_URL}/api/analyze`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base64:b64,mediaType:f.type}),signal:AbortSignal.timeout(60000)});parsed=await resp.json();break;}catch{if(i<3)await new Promise(r=>setTimeout(r,3000));}} if(parsed&&!parsed.error){setAiResult("✓ "+(parsed.descripcion||"Archivo procesado"));setForm(prev=>({...prev,amount:parsed.monto?String(parsed.monto):prev.amount,date:parsed.fecha||prev.date,dueDate:parsed.vencimiento||prev.dueDate,desc:parsed.descripcion||prev.desc,subcat:parsed.categoria_sugerida||prev.subcat,category:parsed.foco_sugerido||prev.category}));}else setAiResult("No se pudo extraer datos. Completá manualmente.");}catch{setAiResult("Error procesando el archivo.");} setAiLoading(false);}};
-  const handleSubmit=async()=>{ if(!form.amount||!form.date) return; const row={category:form.category,subcat:form.subcat,amount:parseFloat(form.amount),moneda:form.moneda,date:form.date,due_date:form.dueDate||null,descripcion:form.desc,medio:form.medio,pagado:form.pagado,recurring:form.recurring,file_name:form.fileName}; if(editId){await supabase.from("gastos").update(row).eq("id",editId);setExpenses(p=>p.map(e=>e.id===editId?{...form,id:editId,amount:parseFloat(form.amount)}:e));setEditId(null);}else{const{data}=await supabase.from("gastos").insert(row).select();if(data?.[0])setExpenses(p=>[{...form,id:String(data[0].id),amount:parseFloat(form.amount)},...p]);} setForm({category:Object.keys(categories)[0],subcat:Object.values(categories)[0].subcats[0]||"",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:medios[0]||"Transferencia",pagado:false}); setAiResult(""); setShowForm(false); };
+  const handleSubmit=async()=>{
+    if(!form.amount||!form.date) return;
+    const row={category:form.category,subcat:form.subcat,amount:parseFloat(form.amount),moneda:form.moneda,date:form.date,due_date:form.dueDate||null,descripcion:form.desc,medio:form.medio,pagado:form.pagado,recurring:form.recurring,file_name:form.fileName};
+    const esTarjeta = MEDIOS_TARJETA.includes(form.medio) || medios.filter(m=>!BASE_MEDIOS.includes(m)).some(m=>m===form.medio&&m.toLowerCase().includes("visa")||m.toLowerCase().includes("amex")||m.toLowerCase().includes("master"));
+    if(editId){
+      await supabase.from("gastos").update(row).eq("id",editId);
+      setExpenses(p=>p.map(e=>e.id===editId?{...form,id:editId,amount:parseFloat(form.amount)}:e));
+      setEditId(null);
+    } else {
+      const{data}=await supabase.from("gastos").insert(row).select();
+      if(data?.[0]){
+        setExpenses(p=>[{...form,id:String(data[0].id),amount:parseFloat(form.amount)},...p]);
+        // Si no es tarjeta y tiene cuenta origen → generar movimiento automático en Ahorros
+        if(!esTarjeta && form.cuenta_origen_id){
+          const monto=parseFloat(form.amount);
+          const tc=parseFloat(form.tipo_cambio_manual)||getBlueRate(form.date)||getLatestBlueRate()||1;
+          const monto_usd=form.moneda==="USD"?monto:monto/tc;
+          await supabase.from("movimientos").insert({
+            fecha:form.date,
+            descripcion:`${form.subcat}${form.desc?" — "+form.desc:""}`,
+            cuenta_origen_id:parseInt(form.cuenta_origen_id),
+            cuenta_destino_id:null,
+            monto,
+            moneda:form.moneda,
+            tipo_cambio:form.moneda==="ARS"?tc:null,
+            monto_usd,
+          });
+        }
+      }
+    }
+    const firstCat=Object.keys(categories)[0];
+    setForm({category:firstCat,subcat:Object.values(categories)[0].subcats[0]||"",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:medios[0]||"Transferencia",pagado:false,cuenta_origen_id:"",tipo_cambio_manual:""});
+    setAiResult(""); setShowForm(false);
+  };
   const del=async(id)=>{ await supabase.from("gastos").delete().eq("id",id); setExpenses(p=>p.filter(e=>e.id!==id)); };
   const edit=e=>{ setForm({...e,amount:String(e.amount)}); setEditId(e.id); setShowForm(true); };
   const filtered=expenses.filter(e=>{ const mc=filterCat==="all"||e.category===filterCat; const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`); const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado); const ms=filterSubcat==="all"||e.subcat===filterSubcat; return mc&&mm&&mp&&ms; });
@@ -792,13 +861,25 @@ export default function App() {
               <input type="text" value={form.desc} onChange={e=>setForm(p=>({...p,desc:e.target.value}))} placeholder="Ej: Factura Edesur Febrero" style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:14,boxSizing:"border-box"}}/>
             </div>
             <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Medio de pago</label>
-              <MedioSelector value={form.medio} onChange={v=>setForm(p=>({...p,medio:v}))} medios={medios} onAddMedio={handleAddMedio}/>
+              <MedioSelector value={form.medio} onChange={v=>setForm(p=>({...p,medio:v,cuenta_origen_id:"",tipo_cambio_manual:""}))} medios={medios} onAddMedio={handleAddMedio}/>
             </div>
             <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Estado</label>
               <select value={form.pagado?"1":"0"} onChange={e=>setForm(p=>({...p,pagado:e.target.value==="1"}))} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:`1px solid ${form.pagado?"#1d9e75":"#e24b4a"}`,fontSize:14,background:form.pagado?"#f0faf5":"#fef2f2",color:form.pagado?"#0f6e56":"#a32d2d",fontWeight:500,boxSizing:"border-box"}}>
                 <option value="0">🔴 Pendiente</option><option value="1">🟢 Pagado</option>
               </select>
             </div>
+            {/* Campos extra para gastos no-tarjeta */}
+            {!MEDIOS_TARJETA.includes(form.medio)&&(
+              <CuentaOrigenSelector
+                value={form.cuenta_origen_id}
+                onChange={v=>setForm(p=>({...p,cuenta_origen_id:v}))}
+                moneda={form.moneda}
+                date={form.date}
+                tcManual={form.tipo_cambio_manual}
+                onTcChange={v=>setForm(p=>({...p,tipo_cambio_manual:v}))}
+                amount={form.amount}
+              />
+            )}
           </div>
           <div style={{marginTop:12}}><label style={{fontSize:12,color:"#666"}}><input type="checkbox" checked={form.recurring} onChange={e=>setForm(p=>({...p,recurring:e.target.checked}))} style={{marginRight:4}}/>Gasto recurrente mensual</label></div>
           <div style={{marginTop:12}}>
@@ -978,6 +1059,20 @@ function AhorrosTab() {
     return saldo;
   }
 
+  // ── Deuda de tarjeta = gastos ARS no saldados por pagos en movimientos ──
+  // La deuda se muestra en ARS (suma exacta de gastos) y en USD al último blue
+  function getDeudaTarjeta(nombreTarjeta) {
+    // Buscar la cuenta de esta tarjeta
+    const cuenta = cuentas.find(c => c.nombre === nombreTarjeta && c.tipo === "tarjeta");
+    if (!cuenta) return { ars: 0, usd: 0 };
+    // El saldo de la cuenta ya refleja los pagos registrados como movimientos
+    // saldo negativo = deuda; saldo positivo = a favor
+    const saldoUSD = getSaldo(cuenta.id);
+    const latestRate = getLatestBlueRate() || 1;
+    // Deuda en ARS al último blue
+    return { usd: saldoUSD, ars: saldoUSD * latestRate };
+  }
+
   const patrimonioTotal = cuentas
     .filter(c => c.tipo === "liquida")
     .reduce((s, c) => s + getSaldo(c.id), 0);
@@ -1076,6 +1171,7 @@ function AhorrosTab() {
         {cuentas.map(c => {
           const saldo = getSaldo(c.id);
           const isNeg = saldo < 0;
+          const latestRate = getLatestBlueRate();
           return (
             <div key={c.id} style={{ background:"#fff", border:`1px solid ${tipoColor[c.tipo]}33`, borderTop:`3px solid ${tipoColor[c.tipo]}`, borderRadius:12, padding:"1rem", position:"relative" }}>
               <div style={{ fontSize:11, color:tipoColor[c.tipo], fontWeight:500, marginBottom:4, display:"flex", alignItems:"center", gap:4 }}>
@@ -1083,7 +1179,15 @@ function AhorrosTab() {
               </div>
               <div style={{ fontSize:14, fontWeight:600, marginBottom:6, color:"#1a1a1a" }}>{c.nombre}</div>
               <div style={{ fontSize:20, fontWeight:700, color: isNeg ? "#e24b4a" : "#1d9e75" }}>{fmtUSD(saldo)}</div>
-              {c.tipo === "tarjeta" && isNeg && <div style={{ fontSize:11, color:"#e24b4a", marginTop:2 }}>Deuda pendiente</div>}
+              {c.tipo === "tarjeta" && isNeg && latestRate && (
+                <div style={{ fontSize:12, color:"#e24b4a", marginTop:2 }}>
+                  Deuda: {fmtARS(Math.abs(saldo) * latestRate)}
+                  <span style={{ fontSize:10, color:"#bbb", marginLeft:4 }}>al blue {fmtARS(latestRate)}</span>
+                </div>
+              )}
+              {c.tipo === "tarjeta" && !isNeg && saldo === 0 && (
+                <div style={{ fontSize:11, color:"#1d9e75", marginTop:2 }}>Sin deuda</div>
+              )}
               <div style={{ display:"flex", gap:6, marginTop:10 }}>
                 <button onClick={() => { setFormCuenta({ nombre:c.nombre, tipo:c.tipo, moneda:c.moneda, saldo_inicial:c.saldo_inicial, orden:c.orden }); setEditCuenta(c); setShowFormCuenta(true); }} style={{ fontSize:11, padding:"2px 10px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#666" }}>Editar</button>
                 <button onClick={() => handleDeleteCuenta(c.id)} style={{ fontSize:11, padding:"2px 8px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#e24b4a" }}>✕</button>
