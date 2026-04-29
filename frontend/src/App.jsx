@@ -14,7 +14,7 @@ const DEFAULT_CATEGORIES = {
 const DEFAULT_INCOME_CATEGORIES = ["Sueldo","Freelance / Honorarios","Alquiler cobrado","Dividendos","Venta de activos","Bono","Otros ingresos"];
 const BASE_MEDIOS = ["Débito automático","Transferencia","Efectivo","VISA ICBC","VISA Santander","Amex Santander"];
 const MONTHS_FULL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-const TABS = ["Dashboard","Gastos","Ingresos","Calendario","Análisis"];
+const TABS = ["Dashboard","Gastos","Ingresos","Calendario","Análisis","Ahorros"];
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────────
@@ -896,6 +896,334 @@ export default function App() {
 
       {tab==="Análisis"&&(
         <div id="section-analisis">
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
+            <ExportButtons onCSV={()=>{const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const rows=[["Foco",...months,"Total"]]; Object.entries(categories).forEach(([k,v])=>{const totals=months.map(m=>expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0)); const total=totals.reduce((a,b)=>a+b,0); if(total>0) rows.push([v.label,...totals.map(t=>t.toFixed(2)),total.toFixed(2)]);}); exportCSV(rows,"analisis_hogar");}} onPDF={()=>exportPDF("Análisis","analisis_hogar","section-analisis")}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+            <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
+              <h3 style={{margin:"0 0 1rem",fontSize:15,fontWeight:500}}>Distribución por foco (USD Blue)</h3>
+              {expenses.length===0?<p style={{fontSize:13,color:"#999"}}>Sin datos.</p>
+              :Object.entries(categories).map(([k,v])=>{
+                const tot=expenses.filter(e=>e.category===k).reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0);
+                const total=expenses.reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0);
+                const pct=total>0?Math.round((tot/total)*100):0;
+                return(<div key={k} style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}><span>{v.icon} {v.label}</span><span style={{fontWeight:500}}>{fmtUSD(tot)} ({pct}%)</span></div>
+                  <div style={{height:8,background:"#f0f0f0",borderRadius:4}}><div style={{height:"100%",width:`${pct}%`,background:v.color,borderRadius:4}}></div></div>
+                </div>);
+              })}
+            </div>
+            <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
+              <h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:500}}>Resumen por mes (USD Blue)</h3>
+              <p style={{fontSize:12,color:"#999",margin:"0 0 1rem"}}>Hacé clic en un foco para ver el detalle</p>
+              <ExpandableTable expenses={expenses} categories={categories}/>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==="Ahorros"&&<AhorrosTab/>}
+    </div>
+  );
+}
+
+// ─── AHORROS TAB ─────────────────────────────────────────────────────────────────
+
+function AhorrosTab() {
+  const [cuentas, setCuentas] = useState([]);
+  const [movimientos, setMovimientos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showFormCuenta, setShowFormCuenta] = useState(false);
+  const [showFormMov, setShowFormMov] = useState(false);
+  const [editCuenta, setEditCuenta] = useState(null);
+  const [editMov, setEditMov] = useState(null);
+
+  const defaultCuenta = { nombre:"", tipo:"liquida", moneda:"USD", saldo_inicial:0, orden:0 };
+  const defaultMov = () => ({
+    fecha: new Date().toISOString().slice(0,10),
+    descripcion: "",
+    cuenta_origen_id: "",
+    cuenta_destino_id: "",
+    monto: "",
+    moneda: "USD",
+    tipo_cambio: getLatestBlueRate() || "",
+    tipo_mov: "transferencia", // 'transferencia' | 'gasto' | 'ingreso_externo'
+  });
+
+  const [formCuenta, setFormCuenta] = useState(defaultCuenta);
+  const [formMov, setFormMov] = useState(defaultMov());
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    const [{ data: c }, { data: m }] = await Promise.all([
+      supabase.from("cuentas").select("*").order("orden"),
+      supabase.from("movimientos").select("*").order("fecha", { ascending: false }),
+    ]);
+    if (c) setCuentas(c);
+    if (m) setMovimientos(m);
+    setLoading(false);
+  };
+
+  // ── Saldo actual de cada cuenta ──────────────────────────────────
+  function getSaldo(cuentaId) {
+    const cuenta = cuentas.find(c => c.id === cuentaId);
+    if (!cuenta) return 0;
+    let saldo = Number(cuenta.saldo_inicial) || 0;
+    movimientos.forEach(m => {
+      if (m.cuenta_origen_id === cuentaId) saldo -= Number(m.monto_usd);
+      if (m.cuenta_destino_id === cuentaId) saldo += Number(m.monto_usd);
+    });
+    return saldo;
+  }
+
+  const patrimonioTotal = cuentas
+    .filter(c => c.tipo === "liquida")
+    .reduce((s, c) => s + getSaldo(c.id), 0);
+
+  // ── Guardar cuenta ───────────────────────────────────────────────
+  const handleSaveCuenta = async () => {
+    const row = { nombre: formCuenta.nombre, tipo: formCuenta.tipo, moneda: formCuenta.moneda, saldo_inicial: parseFloat(formCuenta.saldo_inicial) || 0, orden: parseInt(formCuenta.orden) || 0 };
+    if (editCuenta) {
+      await supabase.from("cuentas").update(row).eq("id", editCuenta.id);
+    } else {
+      await supabase.from("cuentas").insert(row);
+    }
+    setShowFormCuenta(false); setEditCuenta(null); setFormCuenta(defaultCuenta);
+    loadAll();
+  };
+
+  const handleDeleteCuenta = async (id) => {
+    if (!confirm("¿Eliminar esta cuenta? También se eliminarán sus movimientos.")) return;
+    await supabase.from("movimientos").delete().or(`cuenta_origen_id.eq.${id},cuenta_destino_id.eq.${id}`);
+    await supabase.from("cuentas").delete().eq("id", id);
+    loadAll();
+  };
+
+  // ── Guardar movimiento ───────────────────────────────────────────
+  const handleSaveMov = async () => {
+    const f = formMov;
+    if (!f.monto || !f.fecha || !f.cuenta_origen_id) return;
+    const monto = parseFloat(f.monto);
+    let tc = parseFloat(f.tipo_cambio) || getBlueRate(f.fecha) || getLatestBlueRate() || 1;
+    const monto_usd = f.moneda === "USD" ? monto : monto / tc;
+    const row = {
+      fecha: f.fecha,
+      descripcion: f.descripcion,
+      cuenta_origen_id: parseInt(f.cuenta_origen_id),
+      cuenta_destino_id: f.cuenta_destino_id ? parseInt(f.cuenta_destino_id) : null,
+      monto,
+      moneda: f.moneda,
+      tipo_cambio: f.moneda === "ARS" ? tc : null,
+      monto_usd,
+    };
+    if (editMov) {
+      await supabase.from("movimientos").update(row).eq("id", editMov.id);
+    } else {
+      await supabase.from("movimientos").insert(row);
+    }
+    setShowFormMov(false); setEditMov(null); setFormMov(defaultMov());
+    loadAll();
+  };
+
+  const handleDeleteMov = async (id) => {
+    await supabase.from("movimientos").delete().eq("id", id);
+    loadAll();
+  };
+
+  const tipoColor = { liquida: "#3266ad", tarjeta: "#d85a30" };
+  const tipoIcon = { liquida: "🏦", tarjeta: "💳" };
+
+  // ── Cuando cambia la fecha en el form mov, actualiza TC automático
+  const handleFechaMov = (fecha) => {
+    const tc = getBlueRate(fecha) || getLatestBlueRate() || "";
+    setFormMov(p => ({ ...p, fecha, tipo_cambio: p.moneda === "ARS" ? tc : p.tipo_cambio }));
+  };
+
+  const handleMonedaMov = (moneda) => {
+    const tc = moneda === "ARS" ? (getBlueRate(formMov.fecha) || getLatestBlueRate() || "") : "";
+    setFormMov(p => ({ ...p, moneda, tipo_cambio: tc }));
+  };
+
+  const montoUSDPreview = () => {
+    const m = parseFloat(formMov.monto);
+    const tc = parseFloat(formMov.tipo_cambio);
+    if (!m) return null;
+    if (formMov.moneda === "USD") return m;
+    if (!tc) return null;
+    return m / tc;
+  };
+
+  if (loading) return <p style={{ textAlign:"center", color:"#999", fontSize:14, padding:"2rem" }}>Cargando...</p>;
+
+  return (
+    <div>
+      {/* ── Patrimonio total ── */}
+      <div style={{ background:"linear-gradient(135deg,#3266ad,#1a4a8a)", borderRadius:16, padding:"1.5rem", marginBottom:"1.25rem", color:"#fff" }}>
+        <p style={{ fontSize:13, margin:"0 0 4px", opacity:0.8 }}>Patrimonio neto (cuentas líquidas)</p>
+        <p style={{ fontSize:36, fontWeight:700, margin:"0 0 4px", letterSpacing:-1 }}>{fmtUSD(patrimonioTotal)}</p>
+        <p style={{ fontSize:12, margin:0, opacity:0.6 }}>Saldo inicial + movimientos registrados</p>
+      </div>
+
+      {/* ── Cards de cuentas ── */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <h3 style={{ margin:0, fontSize:15, fontWeight:500 }}>Cuentas</h3>
+        <button onClick={() => { setFormCuenta(defaultCuenta); setEditCuenta(null); setShowFormCuenta(true); }} style={{ fontSize:13, padding:"5px 14px", background:"#3266ad", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>+ Nueva cuenta</button>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10, marginBottom:"1.5rem" }}>
+        {cuentas.map(c => {
+          const saldo = getSaldo(c.id);
+          const isNeg = saldo < 0;
+          return (
+            <div key={c.id} style={{ background:"#fff", border:`1px solid ${tipoColor[c.tipo]}33`, borderTop:`3px solid ${tipoColor[c.tipo]}`, borderRadius:12, padding:"1rem", position:"relative" }}>
+              <div style={{ fontSize:11, color:tipoColor[c.tipo], fontWeight:500, marginBottom:4, display:"flex", alignItems:"center", gap:4 }}>
+                {tipoIcon[c.tipo]} {c.tipo === "liquida" ? "Cuenta" : "Tarjeta"}
+              </div>
+              <div style={{ fontSize:14, fontWeight:600, marginBottom:6, color:"#1a1a1a" }}>{c.nombre}</div>
+              <div style={{ fontSize:20, fontWeight:700, color: isNeg ? "#e24b4a" : "#1d9e75" }}>{fmtUSD(saldo)}</div>
+              {c.tipo === "tarjeta" && isNeg && <div style={{ fontSize:11, color:"#e24b4a", marginTop:2 }}>Deuda pendiente</div>}
+              <div style={{ display:"flex", gap:6, marginTop:10 }}>
+                <button onClick={() => { setFormCuenta({ nombre:c.nombre, tipo:c.tipo, moneda:c.moneda, saldo_inicial:c.saldo_inicial, orden:c.orden }); setEditCuenta(c); setShowFormCuenta(true); }} style={{ fontSize:11, padding:"2px 10px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#666" }}>Editar</button>
+                <button onClick={() => handleDeleteCuenta(c.id)} style={{ fontSize:11, padding:"2px 8px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#e24b4a" }}>✕</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Form nueva cuenta ── */}
+      {showFormCuenta && (
+        <div style={{ background:"#fff", border:"1px solid #e0e0e0", borderRadius:12, padding:"1.25rem", marginBottom:"1.25rem" }}>
+          <h4 style={{ margin:"0 0 1rem", fontSize:15, fontWeight:500 }}>{editCuenta ? "Editar cuenta" : "Nueva cuenta"}</h4>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Nombre</label>
+              <input value={formCuenta.nombre} onChange={e=>setFormCuenta(p=>({...p,nombre:e.target.value}))} placeholder="Ej: Cash Casa" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Tipo</label>
+              <select value={formCuenta.tipo} onChange={e=>setFormCuenta(p=>({...p,tipo:e.target.value}))} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}>
+                <option value="liquida">🏦 Cuenta líquida</option>
+                <option value="tarjeta">💳 Tarjeta de crédito</option>
+              </select>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Saldo inicial (USD)</label>
+              <input type="number" value={formCuenta.saldo_inicial} onChange={e=>setFormCuenta(p=>({...p,saldo_inicial:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Orden (para ordenar las cards)</label>
+              <input type="number" value={formCuenta.orden} onChange={e=>setFormCuenta(p=>({...p,orden:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8, marginTop:"1rem" }}>
+            <button onClick={handleSaveCuenta} style={{ padding:"8px 20px", background:"#3266ad", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontSize:14, fontWeight:500 }}>Guardar</button>
+            <button onClick={() => { setShowFormCuenta(false); setEditCuenta(null); }} style={{ padding:"8px 16px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", fontSize:14, color:"#666" }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Movimientos ── */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <h3 style={{ margin:0, fontSize:15, fontWeight:500 }}>Movimientos</h3>
+        <button onClick={() => { setFormMov(defaultMov()); setEditMov(null); setShowFormMov(true); }} style={{ fontSize:13, padding:"5px 14px", background:"#1d9e75", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>+ Nuevo movimiento</button>
+      </div>
+
+      {/* ── Form nuevo movimiento ── */}
+      {showFormMov && (
+        <div style={{ background:"#fff", border:"1px solid #e0e0e0", borderRadius:12, padding:"1.25rem", marginBottom:"1.25rem" }}>
+          <h4 style={{ margin:"0 0 1rem", fontSize:15, fontWeight:500 }}>{editMov ? "Editar movimiento" : "Nuevo movimiento"}</h4>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Fecha</label>
+              <input type="date" value={formMov.fecha} onChange={e=>handleFechaMov(e.target.value)} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Tipo de movimiento</label>
+              <select value={formMov.tipo_mov} onChange={e=>setFormMov(p=>({...p,tipo_mov:e.target.value,cuenta_destino_id:""}))} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}>
+                <option value="transferencia">↔ Transferencia entre cuentas</option>
+                <option value="gasto">↑ Gasto / salida de dinero</option>
+                <option value="ingreso_externo">↓ Ingreso externo</option>
+              </select>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>
+              {formMov.tipo_mov === "ingreso_externo" ? "Cuenta destino" : "Cuenta origen (sale de acá)"}
+            </label>
+              <select value={formMov.cuenta_origen_id} onChange={e=>setFormMov(p=>({...p,cuenta_origen_id:e.target.value}))} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}>
+                <option value="">— Seleccioná —</option>
+                {cuentas.map(c=><option key={c.id} value={c.id}>{tipoIcon[c.tipo]} {c.nombre} ({fmtUSD(getSaldo(c.id))})</option>)}
+              </select>
+            </div>
+            {formMov.tipo_mov === "transferencia" && (
+              <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Cuenta destino (entra acá)</label>
+                <select value={formMov.cuenta_destino_id} onChange={e=>setFormMov(p=>({...p,cuenta_destino_id:e.target.value}))} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}>
+                  <option value="">— Seleccioná —</option>
+                  {cuentas.filter(c=>String(c.id)!==String(formMov.cuenta_origen_id)).map(c=><option key={c.id} value={c.id}>{tipoIcon[c.tipo]} {c.nombre}</option>)}
+                </select>
+              </div>
+            )}
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Moneda</label>
+              <div style={{ display:"flex", gap:6 }}>
+                {["USD","ARS"].map(m=>(
+                  <button key={m} onClick={()=>handleMonedaMov(m)} style={{ flex:1, padding:"7px", borderRadius:8, border:`1px solid ${formMov.moneda===m?"#3266ad":"#ddd"}`, background:formMov.moneda===m?"#f0f4ff":"#fff", color:formMov.moneda===m?"#3266ad":"#666", fontWeight:formMov.moneda===m?600:400, cursor:"pointer", fontSize:14 }}>{m}</button>
+                ))}
+              </div>
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Monto ({formMov.moneda})</label>
+              <input type="number" value={formMov.monto} onChange={e=>setFormMov(p=>({...p,monto:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+            {formMov.moneda === "ARS" && (
+              <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Tipo de cambio (editable)</label>
+                <input type="number" value={formMov.tipo_cambio} onChange={e=>setFormMov(p=>({...p,tipo_cambio:e.target.value}))} placeholder="TC del día" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #3266ad", fontSize:14, boxSizing:"border-box", background:"#f0f4ff" }}/>
+                {montoUSDPreview() !== null && <p style={{ fontSize:11, color:"#999", margin:"3px 0 0" }}>≈ {fmtUSD(montoUSDPreview())}</p>}
+              </div>
+            )}
+            <div style={{ gridColumn:"1/-1" }}><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Descripción</label>
+              <input type="text" value={formMov.descripcion} onChange={e=>setFormMov(p=>({...p,descripcion:e.target.value}))} placeholder="Ej: Pago resumen VISA / Pago pintor / Transferencia DEEL→Citi" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8, marginTop:"1rem" }}>
+            <button onClick={handleSaveMov} style={{ padding:"8px 20px", background:"#1d9e75", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontSize:14, fontWeight:500 }}>Guardar</button>
+            <button onClick={() => { setShowFormMov(false); setEditMov(null); }} style={{ padding:"8px 16px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", fontSize:14, color:"#666" }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Historial de movimientos ── */}
+      {movimientos.length === 0
+        ? <div style={{ textAlign:"center", padding:"2rem", color:"#999", fontSize:14 }}>No hay movimientos registrados.</div>
+        : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          {movimientos.map(m => {
+            const origen = cuentas.find(c => c.id === m.cuenta_origen_id);
+            const destino = cuentas.find(c => c.id === m.cuenta_destino_id);
+            const esTransferencia = !!destino;
+            const esIngreso = !origen;
+            return (
+              <div key={m.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"#fff", border:"1px solid #eee", borderLeft:`3px solid ${esTransferencia?"#3266ad":esIngreso?"#1d9e75":"#e24b4a"}`, borderRadius:8, padding:"10px 14px", gap:8 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:15 }}>{esTransferencia?"↔":esIngreso?"↓":"↑"}</span>
+                    <span style={{ fontSize:13, fontWeight:500 }}>
+                      {esTransferencia ? `${origen?.nombre} → ${destino?.nombre}` : esIngreso ? `Ingreso → ${cuentas.find(c=>c.id===m.cuenta_destino_id)?.nombre||"?"}` : `${origen?.nombre} → afuera`}
+                    </span>
+                    {m.moneda === "ARS" && m.tipo_cambio && (
+                      <span style={{ fontSize:11, padding:"2px 7px", borderRadius:20, background:"#f0f4ff", color:"#3266ad" }}>TC {fmtARS(m.tipo_cambio)}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize:11, color:"#999", marginTop:2 }}>{m.fecha}{m.descripcion ? ` · ${m.descripcion}` : ""}</div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontWeight:600, fontSize:14, color: esIngreso?"#1d9e75":esTransferencia?"#3266ad":"#e24b4a" }}>{fmtUSD(m.monto_usd)}</div>
+                    {m.moneda === "ARS" && <div style={{ fontSize:11, color:"#aaa" }}>{fmtARS(m.monto)}</div>}
+                  </div>
+                  <button onClick={() => { setFormMov({ fecha:m.fecha, descripcion:m.descripcion||"", cuenta_origen_id:String(m.cuenta_origen_id||""), cuenta_destino_id:String(m.cuenta_destino_id||""), monto:String(m.monto), moneda:m.moneda||"USD", tipo_cambio:String(m.tipo_cambio||""), tipo_mov: m.cuenta_destino_id?"transferencia":"gasto" }); setEditMov(m); setShowFormMov(true); }} style={{ fontSize:12, padding:"3px 10px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>Editar</button>
+                  <button onClick={() => handleDeleteMov(m.id)} style={{ fontSize:12, padding:"3px 8px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#e24b4a" }}>✕</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      }
+    </div>
+  );
+}
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
             <ExportButtons onCSV={()=>{const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const rows=[["Foco",...months,"Total"]]; Object.entries(categories).forEach(([k,v])=>{const totals=months.map(m=>expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0)); const total=totals.reduce((a,b)=>a+b,0); if(total>0) rows.push([v.label,...totals.map(t=>t.toFixed(2)),total.toFixed(2)]);}); exportCSV(rows,"analisis_hogar");}} onPDF={()=>exportPDF("Análisis","analisis_hogar","section-analisis")}/>
           </div>
