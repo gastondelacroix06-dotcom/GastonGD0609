@@ -1349,6 +1349,19 @@ function AhorrosTab({ expenses, categories }) {
   function getSaldo(cuentaId) {
     const cuenta = cuentas.find(c => c.id === cuentaId);
     if (!cuenta) return 0;
+    if (cuenta.tipo === "tarjeta") {
+      // Deuda = gastos con ese medio (en USD al último blue) menos pagos en movimientos
+      const latestRate = getLatestBlueRate() || 1;
+      const gastosUSD = (expenses || [])
+        .filter(e => e.medio === cuenta.nombre)
+        .reduce((s, e) => s + toUSD(e.amount, e.moneda || "ARS", e.date), 0);
+      const pagosUSD = movimientos
+        .filter(m => m.cuenta_destino_id === cuentaId)
+        .reduce((s, m) => s + Number(m.monto_usd), 0);
+      // negativo = deuda pendiente
+      return pagosUSD - gastosUSD;
+    }
+    // Cuenta líquida: saldo inicial ± movimientos
     let saldo = Number(cuenta.saldo_inicial) || 0;
     movimientos.forEach(m => {
       if (m.cuenta_origen_id === cuentaId) saldo -= Number(m.monto_usd);
@@ -1468,23 +1481,37 @@ function AhorrosTab({ expenses, categories }) {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10, marginBottom:"1.5rem" }}>
         {cuentas.map(c => {
           const saldo = getSaldo(c.id);
-          const isNeg = saldo < 0;
           const latestRate = getLatestBlueRate();
+          // Para tarjetas: saldo negativo = deuda, positivo = a favor
+          // Para líquidas: saldo positivo = disponible
+          const esTarjeta = c.tipo === "tarjeta";
+          const tieneDeuda = esTarjeta && saldo < 0;
+          const deudaUSD = Math.abs(saldo);
+          const deudaARS = latestRate ? deudaUSD * latestRate : null;
           return (
             <div key={c.id} style={{ background:"#fff", border:`1px solid ${tipoColor[c.tipo]}33`, borderTop:`3px solid ${tipoColor[c.tipo]}`, borderRadius:12, padding:"1rem", position:"relative" }}>
               <div style={{ fontSize:11, color:tipoColor[c.tipo], fontWeight:500, marginBottom:4, display:"flex", alignItems:"center", gap:4 }}>
-                {tipoIcon[c.tipo]} {c.tipo === "liquida" ? "Cuenta" : "Tarjeta"}
+                {tipoIcon[c.tipo]} {esTarjeta ? "Tarjeta" : "Cuenta"}
               </div>
               <div style={{ fontSize:14, fontWeight:600, marginBottom:6, color:"#1a1a1a" }}>{c.nombre}</div>
-              <div style={{ fontSize:20, fontWeight:700, color: isNeg ? "#e24b4a" : "#1d9e75" }}>{fmtUSD(saldo)}</div>
-              {c.tipo === "tarjeta" && isNeg && latestRate && (
-                <div style={{ fontSize:12, color:"#e24b4a", marginTop:2 }}>
-                  Deuda: {fmtARS(Math.abs(saldo) * latestRate)}
-                  <span style={{ fontSize:10, color:"#bbb", marginLeft:4 }}>al blue {fmtARS(latestRate)}</span>
-                </div>
-              )}
-              {c.tipo === "tarjeta" && !isNeg && saldo === 0 && (
-                <div style={{ fontSize:11, color:"#1d9e75", marginTop:2 }}>Sin deuda</div>
+              {esTarjeta ? (
+                tieneDeuda ? (
+                  <>
+                    <div style={{ fontSize:20, fontWeight:700, color:"#e24b4a" }}>-{fmtUSD(deudaUSD)}</div>
+                    {deudaARS && <div style={{ fontSize:12, color:"#e24b4a", marginTop:2 }}>
+                      {fmtARS(deudaARS)}
+                      <span style={{ fontSize:10, color:"#bbb", marginLeft:4 }}>blue {fmtARS(latestRate)}</span>
+                    </div>}
+                    <div style={{ fontSize:10, color:"#bbb", marginTop:4 }}>Gastos pendientes de pago</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize:20, fontWeight:700, color:"#1d9e75" }}>{fmtUSD(saldo)}</div>
+                    <div style={{ fontSize:11, color:"#1d9e75", marginTop:2 }}>Sin deuda</div>
+                  </>
+                )
+              ) : (
+                <div style={{ fontSize:20, fontWeight:700, color: saldo >= 0 ? "#1d9e75" : "#e24b4a" }}>{fmtUSD(saldo)}</div>
               )}
               <div style={{ display:"flex", gap:6, marginTop:10 }}>
                 <button onClick={() => { setFormCuenta({ nombre:c.nombre, tipo:c.tipo, moneda:c.moneda, saldo_inicial:c.saldo_inicial, orden:c.orden }); setEditCuenta(c); setShowFormCuenta(true); }} style={{ fontSize:11, padding:"2px 10px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#666" }}>Editar</button>
