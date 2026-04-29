@@ -279,6 +279,39 @@ function CuentaOrigenSelector({ value, onChange, moneda, date, tcManual, onTcCha
   );
 }
 
+// ─── SELECTOR DE CUENTA DESTINO (para ingresos) ──────────────────────────────────
+
+function CuentaDestinoSelector({ value, onChange, moneda, date, tcManual, onTcChange, amount }) {
+  const [cuentas, setCuentas] = useState([]);
+  useEffect(() => {
+    supabase.from("cuentas").select("id,nombre,tipo").order("orden")
+      .then(({ data }) => { if (data) setCuentas(data); });
+  }, []);
+
+  const tc = parseFloat(tcManual) || getBlueRate(date) || getLatestBlueRate() || 1;
+  const monto_usd = amount && moneda === "ARS" ? parseFloat(amount) / tc : parseFloat(amount) || 0;
+
+  return (
+    <div style={{gridColumn:"1/-1",background:"#f0f4ff",border:"1px solid #3266ad33",borderRadius:10,padding:"12px 14px"}}>
+      <p style={{fontSize:12,fontWeight:500,color:"#3266ad",margin:"0 0 10px"}}>💰 ¿Este ingreso acredita en alguna cuenta?</p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Cuenta destino (opcional)</label>
+          <select value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:14,boxSizing:"border-box"}}>
+            <option value="">— No acreditar en ninguna cuenta —</option>
+            {cuentas.map(c=><option key={c.id} value={c.id}>{c.tipo==="tarjeta"?"💳":"🏦"} {c.nombre}</option>)}
+          </select>
+        </div>
+        {moneda==="ARS"&&value&&(
+          <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>TC utilizado (editable)</label>
+            <input type="number" value={tcManual} onChange={e=>onTcChange(e.target.value)} placeholder={String(getBlueRate(date)||getLatestBlueRate()||"")} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #3266ad",fontSize:14,background:"#f0f4ff",boxSizing:"border-box"}}/>
+            {amount&&<p style={{fontSize:11,color:"#999",margin:"3px 0 0"}}>≈ {fmtUSD(monto_usd)} que se acreditarán en la cuenta</p>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── PANEL TIPO DE CAMBIO (carga CSV + muestra histórico) ───────────────────────
 
 function TipoCambioPanel({ onUpdate }) {
@@ -584,7 +617,7 @@ function IngresosTab({ incomes, onAdd, onEdit, onDelete, medios, onAddMedio, inc
   const [filterCat, setFilterCat] = useState("all");
   const [showCatEditor, setShowCatEditor] = useState(false);
   const [newCat, setNewCat] = useState("");
-  const defaultForm = () => ({category:incomeCategories[0]||"Sueldo",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",medio:medios[0]||"Transferencia"});
+  const defaultForm = () => ({category:incomeCategories[0]||"Sueldo",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",medio:medios[0]||"Transferencia",cuenta_destino_id:"",tipo_cambio_manual:""});
   const [form, setForm] = useState(defaultForm());
 
   const filtered = incomes.filter(i=>{
@@ -597,8 +630,31 @@ function IngresosTab({ incomes, onAdd, onEdit, onDelete, medios, onAddMedio, inc
   const handleSubmit = async () => {
     if(!form.amount||!form.date) return;
     const row={category:form.category,amount:parseFloat(form.amount),moneda:form.moneda,date:form.date,descripcion:form.desc,medio:form.medio};
-    if(editId){ const{error}=await supabase.from("ingresos").update(row).eq("id",editId); if(!error) onEdit({...row,id:editId,desc:form.desc}); }
-    else{ const{data}=await supabase.from("ingresos").insert(row).select(); if(data?.[0]) onAdd({...row,id:String(data[0].id),desc:form.desc}); }
+    if(editId){
+      const{error}=await supabase.from("ingresos").update(row).eq("id",editId);
+      if(!error) onEdit({...row,id:editId,desc:form.desc});
+    } else {
+      const{data}=await supabase.from("ingresos").insert(row).select();
+      if(data?.[0]){
+        onAdd({...row,id:String(data[0].id),desc:form.desc});
+        // Si eligió cuenta destino → generar movimiento en Ahorros
+        if(form.cuenta_destino_id){
+          const monto=parseFloat(form.amount);
+          const tc=parseFloat(form.tipo_cambio_manual)||getBlueRate(form.date)||getLatestBlueRate()||1;
+          const monto_usd=form.moneda==="USD"?monto:monto/tc;
+          await supabase.from("movimientos").insert({
+            fecha:form.date,
+            descripcion:`${form.category}${form.desc?" — "+form.desc:""}`,
+            cuenta_origen_id:null,
+            cuenta_destino_id:parseInt(form.cuenta_destino_id),
+            monto,
+            moneda:form.moneda,
+            tipo_cambio:form.moneda==="ARS"?tc:null,
+            monto_usd,
+          });
+        }
+      }
+    }
     setForm(defaultForm()); setEditId(null); setShowForm(false);
   };
   const handleAddCat = () => { const v=newCat.trim(); if(!v||incomeCategories.includes(v)) return; onUpdateIncomeCategories([...incomeCategories,v]); setNewCat(""); };
@@ -646,7 +702,7 @@ function IngresosTab({ incomes, onAdd, onEdit, onDelete, medios, onAddMedio, inc
               <input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:14,boxSizing:"border-box"}}/>
             </div>
             <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Moneda</label>
-              <MonedaSelector value={form.moneda} onChange={v=>setForm(p=>({...p,moneda:v}))} date={form.date}/>
+              <MonedaSelector value={form.moneda} onChange={v=>setForm(p=>({...p,moneda:v,tipo_cambio_manual:""}))} date={form.date}/>
             </div>
             <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Monto ({form.moneda})</label>
               <input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0" style={{width:"100%",padding:"7px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:14,boxSizing:"border-box"}}/>
@@ -658,6 +714,16 @@ function IngresosTab({ incomes, onAdd, onEdit, onDelete, medios, onAddMedio, inc
             <div><label style={{fontSize:12,color:"#666",display:"block",marginBottom:4}}>Medio de cobro</label>
               <MedioSelector value={form.medio} onChange={v=>setForm(p=>({...p,medio:v}))} medios={medios} onAddMedio={onAddMedio}/>
             </div>
+            {/* Cuenta destino en Ahorros */}
+            <CuentaDestinoSelector
+              value={form.cuenta_destino_id}
+              onChange={v=>setForm(p=>({...p,cuenta_destino_id:v}))}
+              moneda={form.moneda}
+              date={form.date}
+              tcManual={form.tipo_cambio_manual}
+              onTcChange={v=>setForm(p=>({...p,tipo_cambio_manual:v}))}
+              amount={form.amount}
+            />
           </div>
           <div style={{display:"flex",gap:8,marginTop:"1rem"}}>
             <button onClick={handleSubmit} style={{padding:"8px 20px",background:"#1d9e75",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500}}>{editId?"Guardar cambios":"Agregar ingreso"}</button>
