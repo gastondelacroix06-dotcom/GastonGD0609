@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import React from "react";
 import { supabase } from "./supabase.js";
-import { getBlueRate, getLatestBlueRate, getLatestBlueDate } from "./dolarBlueData.js";
+import { getBlueRate, getLatestBlueRate, getLatestBlueDate, mergeBlueData, parseBlueCSV } from "./dolarBlueData.js";
 
 // ─── CONSTANTES ────────────────────────────────────────────────────────────────
 
@@ -243,6 +243,121 @@ function CategoryEditor({ categories, onClose, onSave }) {
   );
 }
 
+// ─── PANEL TIPO DE CAMBIO (carga CSV + muestra histórico) ───────────────────────
+
+function TipoCambioPanel({ onUpdate }) {
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [showHistorico, setShowHistorico] = useState(false);
+  const csvRef = useRef();
+
+  // Últimos 10 valores del histórico en memoria
+  const latestEntries = Object.entries(
+    // BLUE_HISTORY no es accesible acá directamente, usamos getBlueRate para los últimos 10 días
+    (() => {
+      const today = new Date();
+      const entries = [];
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        const iso = d.toISOString().slice(0, 10);
+        const val = getBlueRate(iso);
+        if (val && (entries.length === 0 || entries[entries.length - 1][1] !== val || entries.length < 2)) {
+          entries.push([iso, val]);
+        }
+        if (entries.length >= 10) break;
+      }
+      return Object.fromEntries(entries);
+    })()
+  ).sort(([a], [b]) => b.localeCompare(a));
+
+  const handleCSV = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setUploading(true);
+    setMsg("Procesando CSV...");
+    try {
+      const text = await f.text();
+      const rows = parseBlueCSV(text);
+      if (!rows.length) { setMsg("❌ No se encontraron datos válidos en el CSV."); setUploading(false); return; }
+
+      // Merge en memoria
+      mergeBlueData(rows);
+
+      // Guardar en Supabase (upsert por fecha)
+      const { error } = await supabase
+        .from("blue_historico")
+        .upsert(rows.map(r => ({ fecha: r.fecha, valor: r.valor })), { onConflict: "fecha" });
+
+      if (error) setMsg(`⚠️ Datos cargados en memoria, pero error al guardar: ${error.message}`);
+      else setMsg(`✓ ${rows.length} cotizaciones cargadas. Último dato: ${rows.sort((a,b)=>b.fecha.localeCompare(a.fecha))[0].fecha}`);
+
+      onUpdate?.(); // re-render del padre
+    } catch (err) {
+      setMsg("❌ Error procesando el archivo.");
+    }
+    setUploading(false);
+    e.target.value = "";
+  };
+
+  const latestRate = getLatestBlueRate();
+  const latestDate = getLatestBlueDate();
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 12, padding: "1.25rem", marginBottom: "1.25rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 22 }}>💵</span>
+          <div>
+            <div style={{ fontSize: 13, color: "#666", marginBottom: 2 }}>Dólar Blue (último dato)</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#3266ad", lineHeight: 1 }}>{latestRate ? fmtARS(latestRate) : "—"}</div>
+            <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>{latestDate || "—"}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            onClick={() => setShowHistorico(p => !p)}
+            style={{ fontSize: 12, padding: "5px 12px", background: "#f5f5f5", border: "1px solid #ddd", borderRadius: 8, cursor: "pointer", color: "#666" }}
+          >
+            {showHistorico ? "Ocultar histórico" : "Ver últimos valores"}
+          </button>
+          <input ref={csvRef} type="file" accept=".csv" onChange={handleCSV} style={{ display: "none" }} />
+          <button
+            onClick={() => csvRef.current.click()}
+            disabled={uploading}
+            style={{ fontSize: 13, padding: "6px 14px", background: "#3266ad", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 500 }}
+          >
+            {uploading ? "Cargando..." : "↑ Actualizar CSV Blue"}
+          </button>
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ marginTop: 10, fontSize: 12, padding: "6px 12px", borderRadius: 8, background: msg.startsWith("✓") ? "#f0faf5" : "#fef2f2", color: msg.startsWith("✓") ? "#0f6e56" : "#a32d2d", border: `1px solid ${msg.startsWith("✓") ? "#1d9e7533" : "#e24b4a33"}` }}>
+          {msg}
+        </div>
+      )}
+
+      {showHistorico && (
+        <div style={{ marginTop: 12, borderTop: "1px solid #f0f0f0", paddingTop: 12 }}>
+          <p style={{ fontSize: 12, color: "#999", margin: "0 0 8px" }}>Últimos valores cargados en memoria:</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {latestEntries.map(([fecha, valor]) => (
+              <div key={fecha} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 20, background: "#f0f4ff", color: "#3266ad", border: "1px solid #3266ad22" }}>
+                <span style={{ color: "#999", marginRight: 4 }}>{fecha}</span>
+                <strong>{fmtARS(valor)}</strong>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: "#bbb", margin: "8px 0 0" }}>
+            Los días sin cotización (fines de semana, feriados) usan el último valor disponible anterior.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────────
 
 function Dashboard({ expenses, incomes, categories }) {
@@ -250,6 +365,7 @@ function Dashboard({ expenses, incomes, categories }) {
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth()+1));
   const [selectedYear] = useState(new Date().getFullYear());
   const [selectedConcepto, setSelectedConcepto] = useState("");
+  const [blueVersion, setBlueVersion] = useState(0); // fuerza re-render al actualizar blue
   const chart1Ref=useRef(null); const chart2Ref=useRef(null); const chart3Ref=useRef(null);
   const c1=useRef(null); const c2=useRef(null); const c3=useRef(null);
   const isYearView = selectedMonth==="all";
@@ -308,6 +424,8 @@ function Dashboard({ expenses, incomes, categories }) {
 
   return (
     <div>
+      <TipoCambioPanel onUpdate={() => setBlueVersion(v => v + 1)} />
+
       <div style={{padding:"8px 14px",background:"#f0f4ff",borderRadius:8,fontSize:12,color:"#666",marginBottom:"1rem",lineHeight:1.5}}>
         💵 <strong style={{color:"#3266ad"}}>Blue histórico:</strong> Cada transacción se convierte a USD usando la cotización del blue del día en que fue registrada (fuente: dolarhoy.com / histórico local). Último dato: <strong>{getLatestBlueDate()}</strong> — {fmtARS(getLatestBlueRate()??0)}.
       </div>
@@ -589,13 +707,14 @@ export default function App() {
   const fileRef=useRef(); const importRef=useRef();
 
   useEffect(()=>{ supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setLoadingSession(false);}); const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>subscription.unsubscribe(); },[]);
-  useEffect(()=>{ if(session){loadExpenses();loadCategories();loadIncomes();loadMedios();loadIncomeCategories();} },[session]);
+  useEffect(()=>{ if(session){loadExpenses();loadCategories();loadIncomes();loadMedios();loadIncomeCategories();loadBlueHistorico();} },[session]);
   useEffect(()=>{ if(tab==="Dashboard"||tab==="Análisis"){ if(!window.Chart){ const s=document.createElement("script"); s.src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"; s.async=true; document.head.appendChild(s); } } },[tab]);
 
   const loadExpenses=async()=>{ setLoadingData(true); const{data,error}=await supabase.from("gastos").select("*").order("id",{ascending:false}); if(!error&&data) setExpenses(data.map(e=>({id:String(e.id),category:e.category,subcat:e.subcat,amount:e.amount,moneda:e.moneda||"ARS",date:e.date,dueDate:e.due_date,desc:e.descripcion,medio:e.medio,pagado:e.pagado,recurring:e.recurring,fileName:e.file_name}))); setLoadingData(false); };
   const loadIncomes=async()=>{ const{data,error}=await supabase.from("ingresos").select("*").order("id",{ascending:false}); if(!error&&data) setIncomes(data.map(i=>({id:String(i.id),category:i.category,amount:i.amount,moneda:i.moneda||"ARS",date:i.date,desc:i.descripcion,medio:i.medio}))); };
   const loadCategories=async()=>{ const{data}=await supabase.from("categorias").select("*"); if(data&&data.length){const cats={}; data.forEach(r=>{if(!cats[r.foco])cats[r.foco]={label:r.foco_label,icon:r.foco_icon,color:r.foco_color,subcats:[]};cats[r.foco].subcats.push(r.subcat);}); setCategories({...DEFAULT_CATEGORIES,...cats});} };
   const loadMedios=async()=>{ const{data}=await supabase.from("medios_pago").select("nombre"); if(data&&data.length){const extras=data.map(d=>d.nombre).filter(m=>!BASE_MEDIOS.includes(m)); setMedios([...BASE_MEDIOS,...extras]);} };
+  const loadBlueHistorico=async()=>{ const{data}=await supabase.from("blue_historico").select("fecha,valor"); if(data&&data.length) mergeBlueData(data); };
   const loadIncomeCategories=async()=>{ const{data}=await supabase.from("categorias_ingreso").select("nombre"); if(data&&data.length) setIncomeCategories(data.map(d=>d.nombre)); };
 
   const handleAddMedio=async(nombre)=>{ if(medios.includes(nombre)) return; setMedios(p=>[...p,nombre]); try{await supabase.from("medios_pago").insert({nombre});}catch{} };
