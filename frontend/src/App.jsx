@@ -1224,31 +1224,3 @@ function AhorrosTab() {
     </div>
   );
 }
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"1rem"}}>
-            <ExportButtons onCSV={()=>{const months=[...new Set(expenses.map(e=>e.date?.slice(0,7)).filter(Boolean))].sort().reverse().slice(0,6); const rows=[["Foco",...months,"Total"]]; Object.entries(categories).forEach(([k,v])=>{const totals=months.map(m=>expenses.filter(e=>e.category===k&&e.date?.startsWith(m)).reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0)); const total=totals.reduce((a,b)=>a+b,0); if(total>0) rows.push([v.label,...totals.map(t=>t.toFixed(2)),total.toFixed(2)]);}); exportCSV(rows,"analisis_hogar");}} onPDF={()=>exportPDF("Análisis","analisis_hogar","section-analisis")}/>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
-            <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
-              <h3 style={{margin:"0 0 1rem",fontSize:15,fontWeight:500}}>Distribución por foco (USD Blue)</h3>
-              {expenses.length===0?<p style={{fontSize:13,color:"#999"}}>Sin datos.</p>
-              :Object.entries(categories).map(([k,v])=>{
-                const tot=expenses.filter(e=>e.category===k).reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0);
-                const total=expenses.reduce((s,e)=>s+toUSD(e.amount,e.moneda,e.date),0);
-                const pct=total>0?Math.round((tot/total)*100):0;
-                return(<div key={k} style={{marginBottom:14}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}><span>{v.icon} {v.label}</span><span style={{fontWeight:500}}>{fmtUSD(tot)} ({pct}%)</span></div>
-                  <div style={{height:8,background:"#f0f0f0",borderRadius:4}}><div style={{height:"100%",width:`${pct}%`,background:v.color,borderRadius:4}}></div></div>
-                </div>);
-              })}
-            </div>
-            <div style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"1.25rem"}}>
-              <h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:500}}>Resumen por mes (USD Blue)</h3>
-              <p style={{fontSize:12,color:"#999",margin:"0 0 1rem"}}>Hacé clic en un foco para ver el detalle</p>
-              <ExpandableTable expenses={expenses} categories={categories}/>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
