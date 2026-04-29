@@ -7,7 +7,7 @@ import { getBlueRate, getLatestBlueRate, getLatestBlueDate, mergeBlueData, parse
 
 const DEFAULT_CATEGORIES = {
   hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Expensas","Seguro Hogar","Alquiler","Otros"] },
-  Actividades: { label:"Actividades", icon:"🎯", color:"#3266ad", subcats:[""Tenis","Futbol","Hockey","Gimnasia Artistica","Otros"] },
+  Actividades: { label:"Actividades", icon:"🎯", color:"#3266ad", subcats:["Tenis","Futbol","Hockey","Gimnasia Artistica","Otros"] },
   autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Tiguan - Seguro","VW Tiguan - Combustible","VW Tiguan - Mecánico","VW Tiguan - Service","HRV - Seguro","HRV - Combustible","HRV - Mecánico","HRV - Service"] },
   hijos: { label:"Hijos", icon:"🧑‍🧑‍🧒‍🧒", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
 };
