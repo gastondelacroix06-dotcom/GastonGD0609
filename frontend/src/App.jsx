@@ -1089,16 +1089,27 @@ export default function App() {
 
 // Mapeo de categorías del Excel a focos/subcats de la app
 const CATEGORIA_MAP = {
-  "Delivery / supermercado": { category:"hogar", subcat:"Otros" },
-  "Combustible":             { category:"autos", subcat:"VW Polo - Combustible" },
-  "Indumentaria / hogar":    { category:"hogar", subcat:"Otros" },
-  "Compras online":          { category:"hogar", subcat:"Otros" },
-  "Suscripciones / digital": { category:"hogar", subcat:"Internet" },
-  "Transporte / peajes":     { category:"autos", subcat:"VW Polo - Combustible" },
-  "Salud":                   { category:"hogar", subcat:"Otros" },
-  "Educación":               { category:"hijos", subcat:"Colegio" },
-  "Restaurantes":            { category:"hogar", subcat:"Otros" },
-  "Entretenimiento":         { category:"hogar", subcat:"Otros" },
+  // Hogar
+  "Comida":                  { category:"hogar",    subcat:"Comida" },
+  "Gastronomia":             { category:"hogar",    subcat:"Salidas" },
+  "Nube":                    { category:"hogar",    subcat:"Nube" },
+  "Suscripciones / digital": { category:"hogar",    subcat:"Nube" },
+  "Movistar Celular":        { category:"hogar",    subcat:"Movistar" },
+  "Seguro":                  { category:"hogar",    subcat:"Seguro Hogar" },
+  "Librería":                { category:"hijos",    subcat:"Otros" },
+  "Compras Juguetes":        { category:"hijos",    subcat:"Otros" },
+  "Socio River":             { category:"hijos",    subcat:"Club Santa Barbara" },
+  // Autos
+  "Combustible":             { category:"autos",    subcat:"Tiguan Nafta" },
+  "Peajes":                  { category:"autos",    subcat:"Peajes" },
+  // Otros
+  "Compras Ropa":            { category:"otros",    subcat:"Compras Ropa" },
+  "Compras online":          { category:"otros",    subcat:"Otros" },
+  "Matercell":               { category:"hogar",    subcat:"Matercell" },
+  "Comision":                { category:"otros",    subcat:"Comision Tarjeta" },
+  "Impuesto":                { category:"otros",    subcat:"Impuesto Tarjeta" },
+  "Interes":                 { category:"otros",    subcat:"Comision Tarjeta" },
+  "Otros":                   { category:"otros",    subcat:"Otros" },
 };
 
 // Convierte fecha serial de Excel a ISO string YYYY-MM-DD
