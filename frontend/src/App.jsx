@@ -805,6 +805,9 @@ export default function App() {
   const [calMonth,setCalMonth]=useState(new Date().getMonth()); const [calYear,setCalYear]=useState(new Date().getFullYear());
   const [filterCat,setFilterCat]=useState("all"); const [filterMonth,setFilterMonth]=useState("all");
   const [filterPagado,setFilterPagado]=useState("all"); const [filterSubcat,setFilterSubcat]=useState("all");
+  const [filterMedio,setFilterMedio]=useState("all");
+  const [selectedIds,setSelectedIds]=useState(new Set());
+  const [deletingBulk,setDeletingBulk]=useState(false);
   const [aiLoading,setAiLoading]=useState(false); const [aiResult,setAiResult]=useState("");
   const [importMsg,setImportMsg]=useState("");
   const fileRef=useRef(); const importRef=useRef();
@@ -862,7 +865,7 @@ export default function App() {
   };
   const del=async(id)=>{ await supabase.from("gastos").delete().eq("id",id); setExpenses(p=>p.filter(e=>e.id!==id)); };
   const edit=e=>{ setForm({...e,amount:String(e.amount)}); setEditId(e.id); setShowForm(true); };
-  const filtered=expenses.filter(e=>{ const mc=filterCat==="all"||e.category===filterCat; const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`); const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado); const ms=filterSubcat==="all"||e.subcat===filterSubcat; return mc&&mm&&mp&&ms; });
+  const filtered=expenses.filter(e=>{ const mc=filterCat==="all"||e.category===filterCat; const mm=filterMonth==="all"||e.date?.startsWith(`${new Date().getFullYear()}-${String(filterMonth).padStart(2,"0")}`); const mp=filterPagado==="all"||(filterPagado==="pagado"&&e.pagado)||(filterPagado==="pendiente"&&!e.pagado); const ms=filterSubcat==="all"||e.subcat===filterSubcat; const med=filterMedio==="all"||e.medio===filterMedio; return mc&&mm&&mp&&ms&&med; });
   const getDueDates=()=>{ const result={}; expenses.forEach(e=>{const d=e.dueDate||e.date; if(!d) return; const eYear=parseInt(d.slice(0,4)),eMonth=parseInt(d.slice(5,7))-1; if(eYear!==calYear||eMonth!==calMonth) return; if(!result[d]) result[d]=[]; result[d].push(e);}); return result; };
   const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
   const firstDay=new Date(calYear,calMonth,1).getDay();
@@ -977,23 +980,65 @@ export default function App() {
 
       {tab==="Gastos"&&(
         <div id="section-gastos">
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem",flexWrap:"wrap",gap:8}}>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}><option value="all">Todos los focos</option>{Object.entries(categories).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
               <select value={filterMonth} onChange={e=>setFilterMonth(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}><option value="all">Todos los meses</option>{MONTHS_FULL.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>
               <select value={filterPagado} onChange={e=>setFilterPagado(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}><option value="all">Todos los estados</option><option value="pagado">Solo pagados</option><option value="pendiente">Solo pendientes</option></select>
               <select value={filterSubcat} onChange={e=>setFilterSubcat(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",fontSize:13}}><option value="all">Todas las categorías</option>{[...new Set(expenses.map(e=>e.subcat))].sort().map(s=><option key={s}>{s}</option>)}</select>
+              <select value={filterMedio} onChange={e=>{setFilterMedio(e.target.value);setSelectedIds(new Set());}} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${filterMedio!=="all"?"#d85a30":"#ddd"}`,fontSize:13,background:filterMedio!=="all"?"#fff8f5":"#fff",color:filterMedio!=="all"?"#d85a30":"inherit",fontWeight:filterMedio!=="all"?500:400}}>
+                <option value="all">Todos los medios</option>
+                {[...new Set(expenses.map(e=>e.medio).filter(Boolean))].sort().map(m=><option key={m}>{m}</option>)}
+              </select>
             </div>
             <ExportButtons onCSV={()=>{const rows=[["ID","Foco","Subcategoría","Descripción","Monto","Moneda","Blue del día","USD equiv.","Fecha","Vencimiento","Medio","Estado","Recurrente"]]; filtered.forEach(e=>{const r=getBlueRate(e.date)||getLatestBlueRate();rows.push([e.id,categories[e.category]?.label,e.subcat,e.desc,fmtRaw(e.amount),e.moneda||"ARS",r||"",toUSD(e.amount,e.moneda,e.date).toFixed(2),e.date,e.dueDate,e.medio,e.pagado?"Pagado":"Pendiente",e.recurring?"Sí":"No"]);}); exportCSV(rows,"gastos_hogar");}} onPDF={()=>exportPDF("Listado de Gastos","gastos_hogar","section-gastos")}/>
           </div>
+
+          {/* ── Barra de selección múltiple ── */}
+          {filtered.length>0&&(
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#f9f9f9",borderRadius:8,marginBottom:"0.75rem",flexWrap:"wrap"}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,cursor:"pointer",userSelect:"none"}}>
+                <input type="checkbox"
+                  checked={selectedIds.size>0&&filtered.every(e=>selectedIds.has(e.id))}
+                  ref={el=>{ if(el) el.indeterminate=selectedIds.size>0&&!filtered.every(e=>selectedIds.has(e.id)); }}
+                  onChange={e=>{ if(e.target.checked) setSelectedIds(new Set(filtered.map(e=>e.id))); else setSelectedIds(new Set()); }}
+                />
+                {selectedIds.size>0?`${selectedIds.size} seleccionados`:"Seleccionar todos"}
+              </label>
+              {selectedIds.size>0&&(
+                <>
+                  <span style={{color:"#ddd"}}>|</span>
+                  <button
+                    disabled={deletingBulk}
+                    onClick={async()=>{
+                      if(!confirm(`¿Eliminar ${selectedIds.size} gastos? Esta acción no se puede deshacer.`)) return;
+                      setDeletingBulk(true);
+                      const ids=[...selectedIds];
+                      const{error}=await supabase.from("gastos").delete().in("id",ids.map(Number));
+                      if(!error){ setExpenses(p=>p.filter(e=>!selectedIds.has(e.id))); setSelectedIds(new Set()); }
+                      setDeletingBulk(false);
+                    }}
+                    style={{fontSize:13,padding:"4px 14px",background:"#e24b4a",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontWeight:500}}
+                  >{deletingBulk?"Eliminando...":"🗑 Eliminar seleccionados"}</button>
+                  <button onClick={()=>setSelectedIds(new Set())} style={{fontSize:12,padding:"4px 10px",background:"none",border:"1px solid #ddd",borderRadius:8,cursor:"pointer",color:"#666"}}>Cancelar</button>
+                </>
+              )}
+              {filterMedio!=="all"&&selectedIds.size===0&&(
+                <span style={{fontSize:12,color:"#d85a30"}}>Filtrando por: <strong>{filterMedio}</strong> — {filtered.length} gastos</span>
+              )}
+            </div>
+          )}
+
           {loadingData?<p style={{textAlign:"center",color:"#999",fontSize:14}}>Cargando...</p>
           :filtered.length===0?<div style={{textAlign:"center",padding:"3rem",color:"#999",fontSize:14}}>No hay gastos que coincidan.</div>
           :<div style={{display:"flex",flexDirection:"column",gap:6}}>
             {filtered.sort((a,b)=>b.date?.localeCompare(a.date)).map(e=>{
               const cat=categories[e.category]; const rate=getBlueRate(e.date)||getLatestBlueRate();
+              const isSelected=selectedIds.has(e.id);
               return(
-                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff",border:`1px solid ${e.pagado?"#1d9e7533":"#e24b4a33"}`,borderLeft:`3px solid ${e.pagado?"#1d9e75":"#e24b4a"}`,borderRadius:8,padding:"10px 14px",gap:8}}>
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:isSelected?"#f0f4ff":"#fff",border:`1px solid ${isSelected?"#3266ad":e.pagado?"#1d9e7533":"#e24b4a33"}`,borderLeft:`3px solid ${isSelected?"#3266ad":e.pagado?"#1d9e75":"#e24b4a"}`,borderRadius:8,padding:"10px 14px",gap:8}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
+                    <input type="checkbox" checked={isSelected} onChange={ev=>{ const s=new Set(selectedIds); ev.target.checked?s.add(e.id):s.delete(e.id); setSelectedIds(s); }} style={{flexShrink:0,cursor:"pointer"}}/>
                     <span style={{fontSize:16}}>{cat?.icon}</span>
                     <div style={{minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -1148,19 +1193,19 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         const catExcel = r["Categoria"] || r["Categoría"] || "";
         const mapped = CATEGORIA_MAP[catExcel];
         const tipo = r["Tipo"] || "";
-        const esRevision = tipo.toLowerCase().includes("reversion") || tipo.toLowerCase().includes("crédito");
+        const esRevision = tipo.toLowerCase().includes("reversion") || tipo.toLowerCase().includes("crédito") || ars < 0;
         return {
           _idx: i,
           fecha,
           desc,
-          ars: esRevision ? ars : Math.abs(ars), // reversiones pueden ser negativas
+          ars: Math.abs(ars),
           esRevision,
           catExcel,
           category: mapped?.category || "",
           subcat: mapped?.subcat || "",
           mapped: !!mapped,
           medio: cuentaSel?.nombre || "VISA",
-          incluir: !esRevision || ars < 0, // incluir reversiones como crédito
+          incluir: !esRevision, // reversiones excluidas por defecto, el usuario puede tildarlas
         };
       }).filter(r => r.ars !== 0);
       setRows(parsed);
@@ -1189,6 +1234,31 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         file_name: "",
       }));
     if (!toInsert.length) { setMsg("No hay filas válidas para importar."); setStep("preview"); return; }
+
+    // Detectar rango de fechas del resumen
+    const fechas = toInsert.map(r => r.date).filter(Boolean).sort();
+    const fechaMin = fechas[0];
+    const fechaMax = fechas[fechas.length - 1];
+    const medioNombre = toInsert[0].medio;
+
+    // Verificar si ya existen gastos de esta tarjeta en ese período
+    const { data: existing } = await supabase
+      .from("gastos")
+      .select("id")
+      .eq("medio", medioNombre)
+      .gte("date", fechaMin)
+      .lte("date", fechaMax);
+
+    if (existing?.length > 0) {
+      const confirmar = confirm(
+        `Ya hay ${existing.length} gastos de "${medioNombre}" entre ${fechaMin} y ${fechaMax}.\n\n¿Querés reemplazarlos con este nuevo resumen?\n\nAceptar = borrar los anteriores e importar los nuevos\nCancelar = solo importar (pueden quedar duplicados)`
+      );
+      if (confirmar) {
+        const ids = existing.map(e => e.id);
+        await supabase.from("gastos").delete().in("id", ids);
+      }
+    }
+
     const { error } = await supabase.from("gastos").insert(toInsert);
     if (error) { setMsg("Error al importar: " + error.message); setStep("preview"); return; }
     setMsg(`✓ ${toInsert.length} transacciones importadas`);
@@ -1239,9 +1309,12 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
             <div style={{ fontSize:13 }}>
               <strong>{total}</strong> transacciones · 
               {sinMapear > 0
-                ? <span style={{ color:"#e24b4a", marginLeft:4 }}>⚠️ {sinMapear} sin categoría — revisalas antes de importar</span>
+                ? <span style={{ color:"#e24b4a", marginLeft:4 }}>⚠️ {sinMapear} sin categoría</span>
                 : <span style={{ color:"#1d9e75", marginLeft:4 }}>✓ Todas mapeadas</span>
               }
+              {rows.filter(r=>r.esRevision).length > 0 && (
+                <span style={{ color:"#888", marginLeft:8 }}>· {rows.filter(r=>r.esRevision).length} devoluciones excluidas (podés tildarlas si querés incluirlas)</span>
+              )}
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={()=>setStep("upload")} style={{ fontSize:12, padding:"5px 12px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>← Volver</button>
@@ -1390,7 +1463,12 @@ function AhorrosTab({ expenses, categories }) {
 
   // ── Guardar cuenta ───────────────────────────────────────────────
   const handleSaveCuenta = async () => {
-    const row = { nombre: formCuenta.nombre, tipo: formCuenta.tipo, moneda: formCuenta.moneda, saldo_inicial: parseFloat(formCuenta.saldo_inicial) || 0, orden: parseInt(formCuenta.orden) || 0 };
+    const montoRaw = parseFloat(formCuenta.saldo_inicial) || 0;
+    // Si ingresó en ARS, convertir a USD al blue actual para guardar siempre en USD
+    const saldo_usd = formCuenta.moneda === "ARS"
+      ? montoRaw / (getLatestBlueRate() || 1)
+      : montoRaw;
+    const row = { nombre: formCuenta.nombre, tipo: formCuenta.tipo, moneda: "USD", saldo_inicial: saldo_usd, orden: parseInt(formCuenta.orden) || 0 };
     if (editCuenta) {
       await supabase.from("cuentas").update(row).eq("id", editCuenta.id);
     } else {
@@ -1511,7 +1589,10 @@ function AhorrosTab({ expenses, categories }) {
                   </>
                 )
               ) : (
-                <div style={{ fontSize:20, fontWeight:700, color: saldo >= 0 ? "#1d9e75" : "#e24b4a" }}>{fmtUSD(saldo)}</div>
+                <>
+                  <div style={{ fontSize:20, fontWeight:700, color: saldo >= 0 ? "#1d9e75" : "#e24b4a" }}>{fmtUSD(saldo)}</div>
+                  {latestRate && <div style={{ fontSize:11, color:"#999", marginTop:2 }}>{fmtARS(saldo * latestRate)}</div>}
+                </>
               )}
               <div style={{ display:"flex", gap:6, marginTop:10 }}>
                 <button onClick={() => { setFormCuenta({ nombre:c.nombre, tipo:c.tipo, moneda:c.moneda, saldo_inicial:c.saldo_inicial, orden:c.orden }); setEditCuenta(c); setShowFormCuenta(true); }} style={{ fontSize:11, padding:"2px 10px", background:"none", border:"1px solid #ddd", borderRadius:6, cursor:"pointer", color:"#666" }}>Editar</button>
@@ -1536,10 +1617,20 @@ function AhorrosTab({ expenses, categories }) {
                 <option value="tarjeta">💳 Tarjeta de crédito</option>
               </select>
             </div>
-            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Saldo inicial (USD)</label>
-              <input type="number" value={formCuenta.saldo_inicial} onChange={e=>setFormCuenta(p=>({...p,saldo_inicial:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Moneda del saldo inicial</label>
+              <div style={{ display:"flex", gap:6 }}>
+                {["USD","ARS"].map(m=>(
+                  <button key={m} onClick={()=>setFormCuenta(p=>({...p,moneda:m}))} style={{ flex:1, padding:"7px", borderRadius:8, border:`1px solid ${formCuenta.moneda===m?"#3266ad":"#ddd"}`, background:formCuenta.moneda===m?"#f0f4ff":"#fff", color:formCuenta.moneda===m?"#3266ad":"#666", fontWeight:formCuenta.moneda===m?600:400, cursor:"pointer", fontSize:14 }}>{m}</button>
+                ))}
+              </div>
             </div>
-            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Orden (para ordenar las cards)</label>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Saldo inicial ({formCuenta.moneda})</label>
+              <input type="number" value={formCuenta.saldo_inicial} onChange={e=>setFormCuenta(p=>({...p,saldo_inicial:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
+              {formCuenta.moneda==="ARS" && formCuenta.saldo_inicial && (
+                <p style={{ fontSize:11, color:"#999", margin:"3px 0 0" }}>≈ {fmtUSD((parseFloat(formCuenta.saldo_inicial)||0) / (getLatestBlueRate()||1))} al blue actual</p>
+              )}
+            </div>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Orden</label>
               <input type="number" value={formCuenta.orden} onChange={e=>setFormCuenta(p=>({...p,orden:e.target.value}))} placeholder="0" style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}/>
             </div>
           </div>
