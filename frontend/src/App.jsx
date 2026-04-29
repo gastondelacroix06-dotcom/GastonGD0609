@@ -6,8 +6,9 @@ import { getBlueRate, getLatestBlueRate, getLatestBlueDate, mergeBlueData, parse
 // ─── CONSTANTES ────────────────────────────────────────────────────────────────
 
 const DEFAULT_CATEGORIES = {
-  hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Impuesto Provincial","Seguro Hogar","Vigilancia","Monitoreo de Puerta","Otros"] },
-  autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Polo - Seguro","VW Polo - Combustible","VW Polo - Mecánico","VW Polo - Service","VW Gol - Seguro","VW Gol - Combustible","VW Gol - Mecánico","VW Gol - Service"] },
+  hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Expensas","Seguro Hogar","Alquiler","Otros"] },
+  Actividades: { label:"Actividades", icon:"🎯", color:"#3266ad", subcats:[""Tenis","Futbol","Hockey","Gimnasia Artistica","Otros"] },
+  autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Tiguan - Seguro","VW Tiguan - Combustible","VW Tiguan - Mecánico","VW Tiguan - Service","HRV - Seguro","HRV - Combustible","HRV - Mecánico","HRV - Service"] },
   hijos: { label:"Hijos", icon:"🧑‍🧑‍🧒‍🧒", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
 };
 
@@ -884,8 +885,18 @@ export default function App() {
           <input ref={importRef} type="file" accept=".csv" onChange={handleImportCSV} style={{display:"none"}}/>
           <button onClick={()=>importRef.current.click()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>↑ CSV</button>
           {importMsg&&<span style={{fontSize:12,color:importMsg.startsWith("✓")?"#1d9e75":"#e24b4a"}}>{importMsg}</span>}
+          <button onClick={async()=>{
+            // Export All: descarga 3 CSVs uno por uno
+            exportCSV([["Foco","Categoría","Descripción","Monto","Moneda","Fecha","Vencimiento","Medio","Estado","Recurrente"],...expenses.map(e=>[categories[e.category]?.label,e.subcat,e.desc,e.amount,e.moneda||"ARS",e.date,e.dueDate,e.medio,e.pagado?"Pagado":"Pendiente",e.recurring?"Sí":"No"])],"export_gastos");
+            await new Promise(r=>setTimeout(r,500));
+            exportCSV([["Categoría","Descripción","Monto","Moneda","Fecha","Medio"],...incomes.map(i=>[i.category,i.desc,i.amount,i.moneda||"ARS",i.date,i.medio])],"export_ingresos");
+            await new Promise(r=>setTimeout(r,500));
+            const{data:movs}=await supabase.from("movimientos").select("*").order("fecha",{ascending:false});
+            const{data:ctas}=await supabase.from("cuentas").select("*");
+            if(movs&&ctas) exportCSV([["Fecha","Descripción","Origen","Destino","Monto","Moneda","TC","Monto USD"],...movs.map(m=>[m.fecha,m.descripcion||"",ctas.find(c=>c.id===m.cuenta_origen_id)?.nombre||"externo",ctas.find(c=>c.id===m.cuenta_destino_id)?.nombre||"externo",m.monto,m.moneda||"USD",m.tipo_cambio||"",m.monto_usd])],"export_movimientos");
+          }} style={{fontSize:13,padding:"6px 14px",background:"#1a4a8a",border:"none",borderRadius:8,cursor:"pointer",color:"#fff",fontWeight:500}}>↓ Export All</button>
           <button onClick={()=>supabase.auth.signOut()} style={{fontSize:13,padding:"6px 14px",background:"#f5f5f5",border:"1px solid #ddd",borderRadius:8,cursor:"pointer"}}>Salir</button>
-          <button onClick={()=>{setShowForm(true);setEditId(null);setAiResult("");setForm({category:firstCat,subcat:categories[firstCat]?.subcats[0]||"",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:medios[0]||"Transferencia",pagado:false});}} style={{fontSize:13,padding:"6px 14px",background:"#3266ad",border:"none",borderRadius:8,cursor:"pointer",color:"#fff",fontWeight:500}}>+ Nuevo Gasto</button>
+          <button onClick={()=>{setShowForm(true);setEditId(null);setAiResult("");setForm({category:firstCat,subcat:categories[firstCat]?.subcats[0]||"",amount:"",moneda:"ARS",date:new Date().toISOString().slice(0,10),desc:"",dueDate:"",recurring:false,fileName:"",medio:medios[0]||"Transferencia",pagado:false,cuenta_origen_id:"",tipo_cambio_manual:""});}} style={{fontSize:13,padding:"6px 14px",background:"#3266ad",border:"none",borderRadius:8,cursor:"pointer",color:"#fff",fontWeight:500}}>+ Nuevo Gasto</button>
         </div>
       </div>
 
@@ -1069,14 +1080,223 @@ export default function App() {
         </div>
       )}
 
-      {tab==="Ahorros"&&<AhorrosTab/>}
+      {tab==="Ahorros"&&<AhorrosTab key={tab} expenses={expenses} categories={categories}/>}
+    </div>
+  );
+}
+
+// ─── IMPORTER DE RESUMEN DE TARJETA ──────────────────────────────────────────────
+
+// Mapeo de categorías del Excel a focos/subcats de la app
+const CATEGORIA_MAP = {
+  "Delivery / supermercado": { category:"hogar", subcat:"Otros" },
+  "Combustible":             { category:"autos", subcat:"VW Polo - Combustible" },
+  "Indumentaria / hogar":    { category:"hogar", subcat:"Otros" },
+  "Compras online":          { category:"hogar", subcat:"Otros" },
+  "Suscripciones / digital": { category:"hogar", subcat:"Internet" },
+  "Transporte / peajes":     { category:"autos", subcat:"VW Polo - Combustible" },
+  "Salud":                   { category:"hogar", subcat:"Otros" },
+  "Educación":               { category:"hijos", subcat:"Colegio" },
+  "Restaurantes":            { category:"hogar", subcat:"Otros" },
+  "Entretenimiento":         { category:"hogar", subcat:"Otros" },
+};
+
+// Convierte fecha serial de Excel a ISO string YYYY-MM-DD
+function excelSerialToISO(serial) {
+  if (!serial || isNaN(serial)) return null;
+  const d = new Date(Math.round((serial - 25569) * 86400 * 1000));
+  return d.toISOString().slice(0, 10);
+}
+
+function TarjetaImporter({ cuentas, categories, onDone }) {
+  const [step, setStep] = useState("upload"); // upload | preview | importing | done
+  const [cuentaId, setCuentaId] = useState("");
+  const [rows, setRows] = useState([]);
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef();
+  const tarjetas = cuentas.filter(c => c.tipo === "tarjeta");
+  const allSubcats = Object.entries(categories).flatMap(([k, v]) => v.subcats.map(s => ({ category: k, subcat: s, label: `${v.icon} ${v.label} › ${s}` })));
+
+  const handleFile = async (e) => {
+    const f = e.target.files[0];
+    if (!f || !cuentaId) { setMsg("Primero seleccioná la tarjeta."); return; }
+    setMsg("Procesando...");
+    try {
+      const buf = await f.arrayBuffer();
+      // Parsear XLSX en el browser con SheetJS
+      const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs");
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+      const cuentaSel = cuentas.find(c => String(c.id) === String(cuentaId));
+      const parsed = data.map((r, i) => {
+        const fecha = excelSerialToISO(r["Fecha"]) || String(r["Fecha"]);
+        const desc = r["Descripcion"] || r["Descripción"] || "";
+        const ars = parseFloat(r["ARS"]) || 0;
+        const catExcel = r["Categoria"] || r["Categoría"] || "";
+        const mapped = CATEGORIA_MAP[catExcel];
+        const tipo = r["Tipo"] || "";
+        const esRevision = tipo.toLowerCase().includes("reversion") || tipo.toLowerCase().includes("crédito");
+        return {
+          _idx: i,
+          fecha,
+          desc,
+          ars: esRevision ? ars : Math.abs(ars), // reversiones pueden ser negativas
+          esRevision,
+          catExcel,
+          category: mapped?.category || "",
+          subcat: mapped?.subcat || "",
+          mapped: !!mapped,
+          medio: cuentaSel?.nombre || "VISA",
+          incluir: !esRevision || ars < 0, // incluir reversiones como crédito
+        };
+      }).filter(r => r.ars !== 0);
+      setRows(parsed);
+      setStep("preview");
+      setMsg("");
+    } catch (err) {
+      setMsg("Error procesando el archivo: " + err.message);
+    }
+    e.target.value = "";
+  };
+
+  const handleImport = async () => {
+    setStep("importing");
+    const toInsert = rows
+      .filter(r => r.incluir && r.category && r.subcat && r.fecha)
+      .map(r => ({
+        category: r.category,
+        subcat: r.subcat,
+        amount: Math.abs(r.ars),
+        moneda: "ARS",
+        date: r.fecha,
+        descripcion: r.desc,
+        medio: r.medio,
+        pagado: false,
+        recurring: false,
+        file_name: "",
+      }));
+    if (!toInsert.length) { setMsg("No hay filas válidas para importar."); setStep("preview"); return; }
+    const { error } = await supabase.from("gastos").insert(toInsert);
+    if (error) { setMsg("Error al importar: " + error.message); setStep("preview"); return; }
+    setMsg(`✓ ${toInsert.length} transacciones importadas`);
+    setStep("done");
+    setTimeout(onDone, 1500);
+  };
+
+  const sinMapear = rows.filter(r => r.incluir && !r.mapped).length;
+  const total = rows.filter(r => r.incluir).length;
+
+  return (
+    <div style={{ background:"#fff", border:"1px solid #d85a3044", borderRadius:12, padding:"1.25rem", marginBottom:"1.25rem" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"1rem" }}>
+        <h4 style={{ margin:0, fontSize:15, fontWeight:500, color:"#d85a30" }}>💳 Importar resumen de tarjeta</h4>
+        <button onClick={onDone} style={{ background:"none", border:"none", fontSize:18, cursor:"pointer", color:"#999" }}>✕</button>
+      </div>
+
+      {step === "upload" && (
+        <div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Tarjeta que impacta</label>
+              <select value={cuentaId} onChange={e=>setCuentaId(e.target.value)} style={{ width:"100%", padding:"7px 10px", borderRadius:8, border:"1px solid #ddd", fontSize:14, boxSizing:"border-box" }}>
+                <option value="">— Seleccioná —</option>
+                {tarjetas.map(c=><option key={c.id} value={c.id}>💳 {c.nombre}</option>)}
+                {tarjetas.length===0&&<option disabled>No tenés tarjetas creadas en Ahorros</option>}
+              </select>
+            </div>
+            <div style={{ display:"flex", alignItems:"flex-end" }}>
+              <div style={{ width:"100%" }}>
+                <label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Archivo Excel (.xlsx)</label>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display:"none" }}/>
+                <button onClick={()=>{ if(!cuentaId){setMsg("Primero seleccioná la tarjeta.");return;} fileRef.current.click(); }} style={{ width:"100%", padding:"7px 10px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:500 }}>
+                  📎 Subir archivo Excel
+                </button>
+              </div>
+            </div>
+          </div>
+          {msg && <p style={{ fontSize:12, color:"#e24b4a", margin:0 }}>{msg}</p>}
+          <p style={{ fontSize:11, color:"#999", margin:"8px 0 0" }}>
+            Formato esperado: columnas Fecha, Descripcion, ARS, Tipo, Categoria — compatible con el Excel de Santander/VISA.
+          </p>
+        </div>
+      )}
+
+      {step === "preview" && (
+        <div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:8 }}>
+            <div style={{ fontSize:13 }}>
+              <strong>{total}</strong> transacciones · 
+              {sinMapear > 0
+                ? <span style={{ color:"#e24b4a", marginLeft:4 }}>⚠️ {sinMapear} sin categoría — revisalas antes de importar</span>
+                : <span style={{ color:"#1d9e75", marginLeft:4 }}>✓ Todas mapeadas</span>
+              }
+            </div>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={()=>setStep("upload")} style={{ fontSize:12, padding:"5px 12px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>← Volver</button>
+              <button onClick={handleImport} disabled={sinMapear>0&&rows.some(r=>r.incluir&&!r.category)} style={{ fontSize:13, padding:"6px 16px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>
+                Importar {total} transacciones →
+              </button>
+            </div>
+          </div>
+          <div style={{ maxHeight:400, overflowY:"auto", border:"1px solid #eee", borderRadius:8 }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+              <thead style={{ position:"sticky", top:0, background:"#f9f9f9" }}>
+                <tr>
+                  <th style={{ padding:"6px 8px", textAlign:"left", color:"#666", fontWeight:500, borderBottom:"1px solid #eee" }}>Incluir</th>
+                  <th style={{ padding:"6px 8px", textAlign:"left", color:"#666", fontWeight:500, borderBottom:"1px solid #eee" }}>Fecha</th>
+                  <th style={{ padding:"6px 8px", textAlign:"left", color:"#666", fontWeight:500, borderBottom:"1px solid #eee" }}>Descripción</th>
+                  <th style={{ padding:"6px 8px", textAlign:"right", color:"#666", fontWeight:500, borderBottom:"1px solid #eee" }}>ARS</th>
+                  <th style={{ padding:"6px 8px", textAlign:"left", color:"#666", fontWeight:500, borderBottom:"1px solid #eee" }}>Cat. Excel</th>
+                  <th style={{ padding:"6px 8px", textAlign:"left", color:"#666", fontWeight:500, borderBottom:"1px solid #eee", minWidth:200 }}>Foco › Subcategoría</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r._idx} style={{ borderBottom:"1px solid #f5f5f5", background: !r.mapped && r.incluir ? "#fff8f0" : r.esRevision ? "#f0faf5" : "#fff" }}>
+                    <td style={{ padding:"5px 8px", textAlign:"center" }}>
+                      <input type="checkbox" checked={r.incluir} onChange={e=>setRows(p=>p.map((x,j)=>j===i?{...x,incluir:e.target.checked}:x))}/>
+                    </td>
+                    <td style={{ padding:"5px 8px", whiteSpace:"nowrap", color:"#666" }}>{r.fecha}</td>
+                    <td style={{ padding:"5px 8px", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={r.desc}>{r.desc}</td>
+                    <td style={{ padding:"5px 8px", textAlign:"right", fontWeight:500, color: r.esRevision?"#1d9e75":"#1a1a1a" }}>
+                      {r.esRevision&&<span style={{ fontSize:10, color:"#1d9e75", marginRight:3 }}>↩</span>}
+                      {fmtARS(Math.abs(r.ars))}
+                    </td>
+                    <td style={{ padding:"5px 8px", fontSize:11, color:"#888" }}>{r.catExcel}</td>
+                    <td style={{ padding:"5px 8px" }}>
+                      {r.incluir ? (
+                        <select
+                          value={`${r.category}|${r.subcat}`}
+                          onChange={e=>{
+                            const [cat,sub]=e.target.value.split("|");
+                            setRows(p=>p.map((x,j)=>j===i?{...x,category:cat,subcat:sub,mapped:true}:x));
+                          }}
+                          style={{ width:"100%", padding:"3px 6px", borderRadius:6, border:`1px solid ${r.mapped?"#ddd":"#e24b4a"}`, fontSize:11, background: r.mapped?"#fff":"#fff0f0" }}
+                        >
+                          <option value="|">⚠️ Sin categoría — seleccioná</option>
+                          {allSubcats.map(s=><option key={`${s.category}|${s.subcat}`} value={`${s.category}|${s.subcat}`}>{s.label}</option>)}
+                        </select>
+                      ) : <span style={{ color:"#ccc", fontSize:11 }}>—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {msg && <p style={{ fontSize:12, color:"#e24b4a", margin:"8px 0 0" }}>{msg}</p>}
+        </div>
+      )}
+
+      {step === "importing" && <p style={{ textAlign:"center", color:"#d85a30", padding:"1rem" }}>⏳ Importando transacciones...</p>}
+      {step === "done" && <p style={{ textAlign:"center", color:"#1d9e75", padding:"1rem", fontWeight:500 }}>{msg}</p>}
     </div>
   );
 }
 
 // ─── AHORROS TAB ─────────────────────────────────────────────────────────────────
 
-function AhorrosTab() {
+function AhorrosTab({ expenses, categories }) {
   const [cuentas, setCuentas] = useState([]);
   const [movimientos, setMovimientos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1084,6 +1304,7 @@ function AhorrosTab() {
   const [showFormMov, setShowFormMov] = useState(false);
   const [editCuenta, setEditCuenta] = useState(null);
   const [editMov, setEditMov] = useState(null);
+  const [showImporter, setShowImporter] = useState(false);
 
   const defaultCuenta = { nombre:"", tipo:"liquida", moneda:"USD", saldo_inicial:0, orden:0 };
   const defaultMov = () => ({
@@ -1094,7 +1315,7 @@ function AhorrosTab() {
     monto: "",
     moneda: "USD",
     tipo_cambio: getLatestBlueRate() || "",
-    tipo_mov: "transferencia", // 'transferencia' | 'gasto' | 'ingreso_externo'
+    tipo_mov: "transferencia",
   });
 
   const [formCuenta, setFormCuenta] = useState(defaultCuenta);
@@ -1292,10 +1513,26 @@ function AhorrosTab() {
       )}
 
       {/* ── Movimientos ── */}
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:8 }}>
         <h3 style={{ margin:0, fontSize:15, fontWeight:500 }}>Movimientos</h3>
-        <button onClick={() => { setFormMov(defaultMov()); setEditMov(null); setShowFormMov(true); }} style={{ fontSize:13, padding:"5px 14px", background:"#1d9e75", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>+ Nuevo movimiento</button>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={() => exportCSV([
+            ["Fecha","Descripcion","Origen","Destino","Monto","Moneda","TC","Monto USD"],
+            ...movimientos.map(m=>[ m.fecha, m.descripcion||"", cuentas.find(c=>c.id===m.cuenta_origen_id)?.nombre||"externo", cuentas.find(c=>c.id===m.cuenta_destino_id)?.nombre||"externo", m.monto, m.moneda||"USD", m.tipo_cambio||"", m.monto_usd ])
+          ],"movimientos")} style={{ fontSize:12, padding:"5px 12px", background:"#f5f5f5", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>↓ Export movimientos</button>
+          <button onClick={() => setShowImporter(p=>!p)} style={{ fontSize:13, padding:"5px 14px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>💳 Subir resumen tarjeta</button>
+          <button onClick={() => { setFormMov(defaultMov()); setEditMov(null); setShowFormMov(true); }} style={{ fontSize:13, padding:"5px 14px", background:"#1d9e75", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>+ Nuevo movimiento</button>
+        </div>
       </div>
+
+      {/* ── Importer de resumen de tarjeta ── */}
+      {showImporter && (
+        <TarjetaImporter
+          cuentas={cuentas}
+          categories={categories}
+          onDone={() => { setShowImporter(false); loadAll(); }}
+        />
+      )}
 
       {/* ── Form nuevo movimiento ── */}
       {showFormMov && (
