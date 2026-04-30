@@ -1436,8 +1436,34 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           .filter(line => line.trim())
           .join('\n');
 
-        const parsed = parsePDFText(fullText, medioNombre);
-        console.log('=== CLEAN TEXT ===\n', fullText.slice(0, 2000));
+        // Post-proceso: fusionar líneas "DD.MM.AA MONTO" con la línea anterior que tiene detalle
+        const lines = fullText.split('\n');
+        const merged = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          // Detectar línea huérfana: solo fecha + monto (sin detalle)
+          const orphan = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*$/);
+          if (orphan && merged.length > 0) {
+            const prev = merged[merged.length - 1];
+            // Si la línea anterior tiene la misma fecha y no tiene monto → fusionar
+            if (prev.startsWith(orphan[1]) && !prev.match(/[\d]{1,3}(?:\.[\d]{3})*,\d{2}/)) {
+              merged[merged.length - 1] = prev + ' ' + orphan[2];
+              continue;
+            }
+            // Si la línea anterior tiene fecha distinta → también fusionar (monto de línea anterior sin monto)
+            const prevHasFecha = prev.match(/^\d{2}\.\d{2}\.\d{2}/);
+            const prevHasMonto = prev.match(/[\d]{1,3}(?:\.[\d]{3})*,\d{2}/);
+            if (prevHasFecha && !prevHasMonto) {
+              merged[merged.length - 1] = prev + ' ' + orphan[2];
+              continue;
+            }
+          }
+          merged.push(line);
+        }
+        const cleanedText = merged.filter(l => l.trim()).join('\n');
+
+        const parsed = parsePDFText(cleanedText, medioNombre);
+        console.log('=== CLEAN TEXT ===\n', cleanedText.slice(0, 2000));
         console.log('=== PARSED ROWS ===', parsed.length);
         if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
         setRows(parsed);
