@@ -1233,7 +1233,28 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       'IVA RG','DB.RG','COMISION PAQUETE','COMISION',
     ];
 
-    for (const line of lines) {
+    for (let lineRaw of lines) {
+      // Deduplicar líneas con fecha/comprobante repetido por doble capa del PDF
+      // Patrón: "DD.MM.AA DD.MM.AA 123456* 123456* DETALLE DETALLE MONTO MONTO"
+      const dupFechaMatch = lineRaw.match(/^(\d{2}\.\d{2}\.\d{2})\s+\1\s+(.*)$/);
+      if (dupFechaMatch) {
+        // Tomar la segunda mitad que tiene comprobante+detalle+monto
+        const rest = dupFechaMatch[2];
+        // La segunda mitad también puede estar duplicada: "123* 123* DESC DESC MONTO MONTO"
+        // Limpiar comprobante duplicado
+        const cleanRest = rest.replace(/^(\d{6}[\w*]*)\s+\1\s+/, '$1 ')
+                              .replace(/^(\S+)\s+\1\s+/, '$1 ');
+        // El monto aparece duplicado al final: "38.150,00 38.150,00" → "38.150,00"
+        const cleanMonto = cleanRest.replace(/([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s+\1\s*$/, '$1');
+        // El detalle también puede estar duplicado en el medio
+        const halfLen = Math.ceil(cleanMonto.length / 2);
+        const firstHalf = cleanMonto.slice(0, halfLen);
+        const secondHalf = cleanMonto.slice(halfLen).trim();
+        lineRaw = secondHalf && firstHalf.trim().endsWith(secondHalf.split(' ')[0])
+          ? dupFechaMatch[1] + ' ' + firstHalf.trim()
+          : dupFechaMatch[1] + ' ' + cleanMonto;
+      }
+      const line = lineRaw;
       const lineUp = line.toUpperCase();
       const skip = SKIP_PREFIXES.some(p => lineUp.startsWith(p.toUpperCase()));
       if (skip) continue;
@@ -1305,7 +1326,22 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
     return results;
   };
 
-  // Mapeo por palabras clave del detalle (para PDF donde no hay columna Categoria)
+  // Mapeo desde categoría sugerida por Claude (para PDF vía backend)
+  const mapearPorCategoria = (cat, desc) => {
+    const c = (cat || "").toLowerCase();
+    const d = (desc || "").toUpperCase();
+    if (c.includes("comida") || c.includes("supermercado") || c.includes("gastronomia")) return { category:"hogar", subcat:"Comida" };
+    if (c.includes("nafta") || c.includes("combustible")) return { category:"autos", subcat:"Tiguan Nafta" };
+    if (c.includes("peaje")) return { category:"autos", subcat:"Peajes" };
+    if (c.includes("nube") || c.includes("streaming") || c.includes("digital")) return { category:"hogar", subcat:"Nube" };
+    if (c.includes("seguro")) return { category:"hogar", subcat:"Seguro Hogar" };
+    if (c.includes("impuesto_tarjeta") || c.includes("impuesto")) return { category:"otros", subcat:"Impuesto Tarjeta" };
+    if (c.includes("ropa") || c.includes("indument")) return { category:"otros", subcat:"Compras Ropa" };
+    // Fallback por palabras del detalle
+    return mapearPorDetalle(d);
+  };
+
+  // Mapeo por palabras clave del detalle (para Excel donde no hay columna Categoria)
   const mapearPorDetalle = (desc) => {
     const d = desc.toUpperCase();
     if (d.includes('PEDIDOSYA') || d.includes('RAPPI') || d.includes('CARREFOUR') || d.includes('MARKET') || d.includes('EXTRA') || d.includes('FREDDO') || d.includes('LUCCIANO') || d.includes('CONFITERIA') || d.includes('ENTREBOLLOS') || d.includes('SATIATA') || d.includes('GRANJA') || d.includes('RAPANUI') || d.includes('PANADER') || d.includes('PIZZ')) return { category:'hogar', subcat:'Comida' };
@@ -1336,140 +1372,61 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const isPDF = f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
 
       if (isPDF) {
+        setMsg("Enviando al servidor para procesar...");
         const buf = await f.arrayBuffer();
-        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.mjs";
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
 
-        // Recolectar todos los items de todas las páginas con su posición
-        let allItems = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const vp = page.getViewport({ scale: 1 });
-          const content = await page.getTextContent();
-          // Normalizar Y: en PDF Y crece hacia arriba, lo invertimos por página
-          content.items.forEach(item => {
-            allItems.push({
-              x: Math.round(item.transform[4]),
-              y: Math.round(vp.height - item.transform[5]), // Y desde arriba
-              str: item.str.trim(),
-              page: i,
+        // Despertar backend si está dormido
+        try { await fetch(`${API_URL}/`); } catch {}
+
+        let resultado = null;
+        for (let intento = 1; intento <= 3; intento++) {
+          try {
+            setMsg(`Procesando con IA... (intento ${intento}/3)`);
+            const resp = await fetch(`${API_URL}/api/parse-resumen`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ base64, mediaType: "application/pdf" }),
+              signal: AbortSignal.timeout(90000),
             });
-          });
-        }
-
-        // Agrupar items en filas usando tolerancia de ±4px en Y
-        allItems.sort((a, b) => a.page !== b.page ? a.page - b.page : a.y !== b.y ? a.y - b.y : a.x - b.x);
-        const rows = [];
-        let currentRow = [];
-        let currentY = null;
-        let currentPage = null;
-        for (const item of allItems) {
-          if (!item.str) continue;
-          if (currentY === null || (item.page === currentPage && Math.abs(item.y - currentY) <= 4)) {
-            currentRow.push(item);
-            currentY = item.y;
-            currentPage = item.page;
-          } else {
-            if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
-            currentRow = [item];
-            currentY = item.y;
-            currentPage = item.page;
+            resultado = await resp.json();
+            if (!resultado.error) break;
+          } catch {
+            if (intento < 3) await new Promise(r => setTimeout(r, 3000));
           }
         }
-        if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
 
-        // El PDF del ICBC tiene dos capas de texto superpuestas → dedup en el texto final
-        // Estrategia: procesar items por columna X para reconstruir transacciones
-        // En el PDF del ICBC las columnas son:
-        // FECHA: x ~ 30-80
-        // COMPROBANTE: x ~ 80-160  
-        // DETALLE: x ~ 160-420
-        // PESOS: x ~ 420-520
-        // DOLARES: x ~ 520+
-        // Como el PDF tiene doble capa, filtramos items duplicados por posición
-        
-        // Primero, obtener el ancho de página para normalizar
-        const pageWidths = {};
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const vp = page.getViewport({ scale: 1 });
-          pageWidths[i] = vp.width;
+        if (!resultado || resultado.error) {
+          setMsg("Error del servidor: " + (resultado?.error || "sin respuesta"));
+          return;
         }
 
-        // Deduplicar items: el PDF tiene dos capas superpuestas
-        // La segunda capa empieza aproximadamente en x > pageW * 0.42 para texto de detalle
-        // pero los montos (PESOS, DOLARES) están en x > pageW * 0.55 y son únicos
-        // Estrategia: para cada fila Y, si hay items duplicados (mismo texto, misma Y),
-        // quedarse solo con el primero (menor X)
-        const deduped = [];
-        for (const item of allItems) {
-          if (!item.str.trim()) continue;
-          // Si ya existe un item con mismo texto, misma página y mismo Y → duplicado
-          const isDup = deduped.some(d =>
-            d.str === item.str &&
-            d.page === item.page &&
-            Math.abs(d.y - item.y) < 3 &&
-            Math.abs(d.x - item.x) > 5  // mismo texto pero X diferente = capa duplicada
-          );
-          if (!isDup) deduped.push(item);
-        }
+        const cuentaSel = cuentas.find(c => String(c.id) === String(cuentaId));
+        const medioNombre = cuentaSel?.nombre || "VISA";
 
-        // Reagrupar en filas por Y con tolerancia ±4px
-        deduped.sort((a,b) => a.page !== b.page ? a.page - b.page : a.y !== b.y ? a.y - b.y : a.x - b.x);
-        const finalRows = [];
-        let curRow = [], curY = null, curPage = null;
-        for (const item of deduped) {
-          if (!item.str.trim()) continue;
-          if (curY === null || (item.page === curPage && Math.abs(item.y - curY) <= 4)) {
-            curRow.push(item);
-            curY = item.y; curPage = item.page;
-          } else {
-            if (curRow.length) finalRows.push(curRow.sort((a,b) => a.x - b.x));
-            curRow = [item]; curY = item.y; curPage = item.page;
-          }
-        }
-        if (curRow.length) finalRows.push(curRow.sort((a,b) => a.x - b.x));
+        const parsed = (resultado.transacciones || []).map((t, i) => {
+          const mapped = mapearPorCategoria(t.categoria_sugerida, t.descripcion);
+          return {
+            _idx: i,
+            fecha: t.fecha,
+            desc: t.descripcion,
+            ars: t.es_reversion ? -Math.abs(t.monto_ars) : Math.abs(t.monto_ars),
+            esRevision: t.es_reversion,
+            catExcel: t.categoria_sugerida,
+            category: t.es_reversion ? "otros" : (mapped?.category || ""),
+            subcat: t.es_reversion ? "Otros" : (mapped?.subcat || ""),
+            mapped: t.es_reversion ? true : !!mapped,
+            medio: medioNombre,
+            incluir: true,
+          };
+        });
 
-        const fullText = finalRows
-          .map(row => row.map(i => i.str).join(' '))
-          .filter(line => line.trim())
-          .join('\n');
-
-        // Post-proceso: fusionar líneas "DD.MM.AA MONTO" con la línea anterior que tiene detalle
-        const lines = fullText.split('\n');
-        const merged = [];
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          // Detectar línea huérfana: solo fecha + monto (sin detalle)
-          const orphan = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*$/);
-          if (orphan && merged.length > 0) {
-            const prev = merged[merged.length - 1];
-            // Si la línea anterior tiene la misma fecha y no tiene monto → fusionar
-            if (prev.startsWith(orphan[1]) && !prev.match(/[\d]{1,3}(?:\.[\d]{3})*,\d{2}/)) {
-              merged[merged.length - 1] = prev + ' ' + orphan[2];
-              continue;
-            }
-            // Si la línea anterior tiene fecha distinta → también fusionar (monto de línea anterior sin monto)
-            const prevHasFecha = prev.match(/^\d{2}\.\d{2}\.\d{2}/);
-            const prevHasMonto = prev.match(/[\d]{1,3}(?:\.[\d]{3})*,\d{2}/);
-            if (prevHasFecha && !prevHasMonto) {
-              merged[merged.length - 1] = prev + ' ' + orphan[2];
-              continue;
-            }
-          }
-          merged.push(line);
-        }
-        const cleanedText = merged.filter(l => l.trim()).join('\n');
-
-        const parsed = parsePDFText(cleanedText, medioNombre);
-        console.log('=== CLEAN TEXT ===\n', cleanedText.slice(0, 2000));
-        console.log('=== PARSED ROWS ===', parsed.length);
-        if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
+        if (!parsed.length) { setMsg("No se encontraron transacciones."); return; }
         setRows(parsed);
         setStep("preview");
         setMsg("");
 
+        // Recolectar todos los items de todas las páginas con su posición
       } else {
         // Excel — lógica original
         const buf = await f.arrayBuffer();
