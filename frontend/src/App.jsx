@@ -1400,7 +1400,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           return t;
         };
 
-        const fullText = dedupedRows
+        const fullText = rows
           .map(row => dedupLine(row.map(i => i.str).join(' ')))
           .filter(line => line.trim())
           .join('\n');
