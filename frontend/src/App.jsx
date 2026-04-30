@@ -1374,7 +1374,14 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       if (isPDF) {
         setMsg("Enviando al servidor para procesar...");
         const buf = await f.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        // btoa con spread falla en PDFs grandes → usar chunks
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        const base64 = btoa(binary);
 
         // Despertar backend si está dormido
         try { await fetch(`${API_URL}/`); } catch {}
