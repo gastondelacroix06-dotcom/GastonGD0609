@@ -1212,20 +1212,57 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
 
     // Palabras que indican que la línea NO es un gasto
     const SKIP_PREFIXES = [
-      'SALDO ANTERIOR','SU PAGO','DEV.IMP','INTERESES','DB IVA','IIBB',
-      'IVA RG','DB.RG','PAGO MINIMO','SALDO ACTUAL','TARJETA','PAGINA',
+      'SALDO ANTERIOR','SU PAGO','DEV.IMP','PAGO MINIMO','SALDO ACTUAL','TARJETA','PAGINA',
       'TITULAR','Plan V','cuotas','TNA','TEA','TEM','CFT','CFTEA',
       'DELACROIX','FECHA','LIMITE','VTO.','CIERRE','VENCIMIENTO',
       'PROXIMO','PAGO MIN','LIMITES','40 OFF'
+    ];
+
+    // Líneas de impuestos/comisiones → van a Otros/Impuesto Tarjeta
+    const IMPUESTO_KEYWORDS = [
+      'INTERESES FINANCIACION','INTERESES PUNIT','DB IVA','IIBB PERCEP',
+      'IVA RG','DB.RG','COMISION PAQUETE','COMISION','INTERES'
     ];
 
     // Regex para parsear línea de transacción del ICBC:
     // DD.MM.AA [COMPROBANTE] DESCRIPCION [C.NN/NN] PESOS[-] [DOLARES]
     const txRegex = /^(\d{2}\.\d{2}\.\d{2})\s+(\S+\*?)?\s*(.+?)\s+([\d.,]+)-?\s*$/;
 
+    // Líneas que son impuestos/comisiones → van a otros/Impuesto Tarjeta
+    const IMPUESTO_KEYS = [
+      'INTERESES FINANCIACION','PUNIT','DB IVA','IIBB PERCEP',
+      'IVA RG','DB.RG','COMISION PAQUETE','COMISION',
+    ];
+
     for (const line of lines) {
-      const skip = SKIP_PREFIXES.some(p => line.toUpperCase().startsWith(p.toUpperCase()));
+      const lineUp = line.toUpperCase();
+      const skip = SKIP_PREFIXES.some(p => lineUp.startsWith(p.toUpperCase()));
       if (skip) continue;
+
+      // Detectar si es una línea de impuesto/comisión (no empieza con fecha pero tiene monto)
+      const esImpuesto = IMPUESTO_KEYS.some(k => lineUp.includes(k));
+      if (esImpuesto) {
+        // Extraer monto — buscar número con formato argentino al final
+        const montoMatch = line.match(/([\d.]+,\d{2})\s*$/);
+        if (montoMatch) {
+          const monto = parseFloat(montoMatch[1].replace(/\./g,'').replace(',','.'));
+          if (monto > 0) {
+            // Buscar fecha en la línea o usar la fecha del último item procesado
+            const fechaMatch = line.match(/(\d{2}\.\d{2}\.\d{2})/);
+            const fecha = fechaMatch
+              ? `20${fechaMatch[1].split('.')[2]}-${fechaMatch[1].split('.')[1]}-${fechaMatch[1].split('.')[0]}`
+              : (results.length ? results[results.length-1].fecha : new Date().toISOString().slice(0,10));
+            results.push({
+              _idx: results.length, fecha,
+              desc: line.replace(/[\d.,]+\s*$/, '').trim().slice(0, 80),
+              ars: monto, usd: 0, esRevision: false, catExcel: '',
+              category: 'otros', subcat: 'Impuesto Tarjeta',
+              mapped: true, medio: medioNombre, incluir: true,
+            });
+          }
+        }
+        continue;
+      }
 
       const match = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+([\w*]+\s+)?(.+?)\s+([\d.,]+)(-?)\s*([\d.,]+)?(-?)?\s*$/);
       if (!match) continue;
@@ -1234,13 +1271,14 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const [dd, mm, aa] = fechaRaw.split('.');
       const fecha = `20${aa}-${mm}-${dd}`;
 
-      // Monto en pesos — negativo si tiene '-' al final o es devolución
       const rawPesos = parseFloat(montoPesos.replace(/\./g,'').replace(',','.')) || 0;
+      const rawUSD = montoDolares ? parseFloat(montoDolares.replace(/\./g,'').replace(',','.')) : 0;
+
+      // Gasto en USD puro (pesos = USD) → viene convertido en el próximo resumen, ignorar
+      if (rawUSD > 0 && Math.abs(rawPesos - rawUSD) < 0.01) continue;
+
       const esRevision = signoP === '-' || detalle.includes('DEV') || detalle.includes('DESCUENTO') || detalle.includes('40 OFF');
       const ars = esRevision ? -rawPesos : rawPesos;
-
-      // Monto en dólares si existe
-      const usd = montoDolares ? parseFloat(montoDolares.replace(/\./g,'').replace(',','.')) : 0;
 
       // Extraer info de cuotas: "C.04/06" → "Cuota 4/6"
       const cuotaMatch = detalle.match(/C\.(\d+)\/(\d+)/);
