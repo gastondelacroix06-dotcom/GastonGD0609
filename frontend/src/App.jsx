@@ -1383,8 +1383,18 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         }
         const base64 = btoa(binary);
 
-        // Despertar backend si está dormido
-        try { await fetch(`${API_URL}/`); } catch {}
+        // Despertar backend — esperar hasta 40 segundos que responda
+        setMsg("Despertando servidor...");
+        let backendOk = false;
+        for (let i = 0; i < 8; i++) {
+          try {
+            const ping = await fetch(`${API_URL}/`, { signal: AbortSignal.timeout(6000) });
+            if (ping.ok) { backendOk = true; break; }
+          } catch {}
+          setMsg(`Despertando servidor... (${(i+1)*6}s)`);
+          await new Promise(r => setTimeout(r, 5000));
+        }
+        if (!backendOk) { setMsg("El servidor no responde. Intentá de nuevo en un minuto."); return; }
 
         let resultado = null;
         for (let intento = 1; intento <= 3; intento++) {
@@ -1394,12 +1404,12 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ base64, mediaType: "application/pdf" }),
-              signal: AbortSignal.timeout(90000),
+              signal: AbortSignal.timeout(120000),
             });
             resultado = await resp.json();
             if (!resultado.error) break;
           } catch {
-            if (intento < 3) await new Promise(r => setTimeout(r, 3000));
+            if (intento < 3) await new Promise(r => setTimeout(r, 4000));
           }
         }
 
