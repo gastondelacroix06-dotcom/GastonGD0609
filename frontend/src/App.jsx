@@ -1380,47 +1380,59 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
 
         // El PDF del ICBC tiene dos capas de texto superpuestas → dedup en el texto final
-        const dedupLine = (line) => {
-          const t = line.trim();
-          if (!t) return t;
+        // Estrategia: procesar items por columna X para reconstruir transacciones
+        // En el PDF del ICBC las columnas son:
+        // FECHA: x ~ 30-80
+        // COMPROBANTE: x ~ 80-160  
+        // DETALLE: x ~ 160-420
+        // PESOS: x ~ 420-520
+        // DOLARES: x ~ 520+
+        // Como el PDF tiene doble capa, filtramos items duplicados por posición
+        
+        // Primero, obtener el ancho de página para normalizar
+        const pageWidths = {};
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const vp = page.getViewport({ scale: 1 });
+          pageWidths[i] = vp.width;
+        }
 
-          const dateRe = /(\d{2}\.\d{2}\.\d{2})/;
-          const firstDate = t.match(dateRe);
-          if (firstDate) {
-            const secondIdx = t.indexOf(firstDate[1], firstDate[1].length + 1);
-            if (secondIdx > 0) {
-              // Tomar la primera parte (antes de la 2da fecha)
-              const firstPart = t.slice(0, secondIdx).trim();
-              // Extraer el monto del final de la línea completa
-              // Formato: número con puntos y coma, opcionalmente seguido de "-"
-              const montoRe = /([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*(?:[\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)?\s*$/;
-              const montoMatch = t.match(montoRe);
-              if (montoMatch && !firstPart.match(montoRe)) {
-                return firstPart + ' ' + montoMatch[1];
-              }
-              return firstPart;
-            }
-          }
-          // Número de comprobante repetido sin fecha
-          const numRe = /(\d{6}[\w*]*)\s+\1/;
-          const numMatch = t.match(numRe);
-          if (numMatch) {
-            const secondIdx = t.indexOf(numMatch[1], numMatch.index + numMatch[1].length);
-            if (secondIdx > 0) {
-              const firstPart = t.slice(0, secondIdx).trim();
-              const montoRe = /([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*(?:[\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)?\s*$/;
-              const montoMatch = t.match(montoRe);
-              if (montoMatch && !firstPart.match(montoRe)) {
-                return firstPart + ' ' + montoMatch[1];
-              }
-              return firstPart;
-            }
-          }
-          return t;
-        };
+        // Deduplicar items: el PDF tiene dos capas superpuestas
+        // La segunda capa empieza aproximadamente en x > pageW * 0.42 para texto de detalle
+        // pero los montos (PESOS, DOLARES) están en x > pageW * 0.55 y son únicos
+        // Estrategia: para cada fila Y, si hay items duplicados (mismo texto, misma Y),
+        // quedarse solo con el primero (menor X)
+        const deduped = [];
+        for (const item of allItems) {
+          if (!item.str.trim()) continue;
+          // Si ya existe un item con mismo texto, misma página y mismo Y → duplicado
+          const isDup = deduped.some(d =>
+            d.str === item.str &&
+            d.page === item.page &&
+            Math.abs(d.y - item.y) < 3 &&
+            Math.abs(d.x - item.x) > 5  // mismo texto pero X diferente = capa duplicada
+          );
+          if (!isDup) deduped.push(item);
+        }
 
-        const fullText = rows
-          .map(row => dedupLine(row.map(i => i.str).join(' ')))
+        // Reagrupar en filas por Y con tolerancia ±4px
+        deduped.sort((a,b) => a.page !== b.page ? a.page - b.page : a.y !== b.y ? a.y - b.y : a.x - b.x);
+        const finalRows = [];
+        let curRow = [], curY = null, curPage = null;
+        for (const item of deduped) {
+          if (!item.str.trim()) continue;
+          if (curY === null || (item.page === curPage && Math.abs(item.y - curY) <= 4)) {
+            curRow.push(item);
+            curY = item.y; curPage = item.page;
+          } else {
+            if (curRow.length) finalRows.push(curRow.sort((a,b) => a.x - b.x));
+            curRow = [item]; curY = item.y; curPage = item.page;
+          }
+        }
+        if (curRow.length) finalRows.push(curRow.sort((a,b) => a.x - b.x));
+
+        const fullText = finalRows
+          .map(row => row.map(i => i.str).join(' '))
           .filter(line => line.trim())
           .join('\n');
 
