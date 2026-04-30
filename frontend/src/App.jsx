@@ -1388,9 +1388,27 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           .filter(line => line.trim())
           .join('\n');
 
-        const parsed = parsePDFText(fullText, medioNombre);
-        console.log('=== PDF TEXT ===\n', fullText.slice(0, 5000));
-        console.log('=== PARSED ROWS ===', parsed.length, parsed.slice(0,5));
+        // pdf.js a veces duplica líneas — limpiar antes de parsear
+        const cleanText = fullText.split('\n').map(line => {
+          // Detectar línea duplicada: "DD.MM.DD DD.MM.DD ..." → tomar la primera mitad
+          const dateMatch = line.match(/^(\d{2}\.\d{2}\.\d{2}\s+.+?)\s+\1\s*$/);
+          if (dateMatch) return dateMatch[1];
+          // Detectar duplicación parcial por columnas: misma fecha repetida al inicio
+          const doubleDateMatch = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+\1\s+(.+?)\s+\2\s+([\d.,]+(?:-)?)\s+\3\s*$/);
+          if (doubleDateMatch) return `${doubleDateMatch[1]} ${doubleDateMatch[2]} ${doubleDateMatch[3]}`;
+          // Caso más común: "DD.MM.AA XXX* DESC DESC MONTO MONTO" → quitar segunda mitad
+          const halfLen = Math.floor(line.length / 2);
+          const firstHalf = line.slice(0, halfLen).trim();
+          const secondHalf = line.slice(halfLen).trim();
+          if (firstHalf && secondHalf && secondHalf.startsWith(firstHalf.slice(0, 10))) {
+            return firstHalf;
+          }
+          return line;
+        }).join('\n');
+
+        const parsed = parsePDFText(cleanText, medioNombre);
+        console.log('=== CLEAN TEXT (primeras líneas) ===\n', cleanText.slice(0, 2000));
+        console.log('=== PARSED ROWS ===', parsed.length);
         if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
         setRows(parsed);
         setStep("preview");
