@@ -1165,13 +1165,45 @@ function excelSerialToISO(serial) {
 }
 
 function TarjetaImporter({ cuentas, categories, onDone }) {
-  const [step, setStep] = useState("upload"); // upload | preview | importing | done
+  const [step, setStep] = useState("upload");
   const [cuentaId, setCuentaId] = useState("");
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
+  const [resumenes, setResumenes] = useState([]); // períodos cargados por tarjeta
+  const [loadingResumenes, setLoadingResumenes] = useState(false);
   const fileRef = useRef();
   const tarjetas = cuentas.filter(c => c.tipo === "tarjeta");
   const allSubcats = Object.entries(categories).flatMap(([k, v]) => v.subcats.map(s => ({ category: k, subcat: s, label: `${v.icon} ${v.label} › ${s}` })));
+
+  // Cargar resúmenes existentes cuando se selecciona tarjeta
+  useEffect(() => {
+    if (!cuentaId) { setResumenes([]); return; }
+    const cuenta = cuentas.find(c => String(c.id) === String(cuentaId));
+    if (!cuenta) return;
+    setLoadingResumenes(true);
+    supabase.from("gastos").select("id,date,amount").eq("medio", cuenta.nombre)
+      .then(({ data }) => {
+        if (!data?.length) { setResumenes([]); setLoadingResumenes(false); return; }
+        // Agrupar por mes
+        const byMonth = {};
+        data.forEach(g => {
+          const mes = g.date?.slice(0, 7);
+          if (!mes) return;
+          if (!byMonth[mes]) byMonth[mes] = { ids:[], count:0, totalARS:0 };
+          byMonth[mes].ids.push(g.id);
+          byMonth[mes].count++;
+          byMonth[mes].totalARS += Math.abs(g.amount || 0);
+        });
+        setResumenes(Object.entries(byMonth).sort(([a],[b])=>b.localeCompare(a)).map(([mes, v]) => ({ mes, ...v })));
+        setLoadingResumenes(false);
+      });
+  }, [cuentaId]);
+
+  const handleEliminarResumen = async (mes, ids) => {
+    if (!confirm(`¿Eliminar los ${ids.length} gastos de ${mes}? Esta acción no se puede deshacer.`)) return;
+    await supabase.from("gastos").delete().in("id", ids);
+    setResumenes(p => p.filter(r => r.mes !== mes));
+  };
 
   const handleFile = async (e) => {
     const f = e.target.files[0];
@@ -1198,14 +1230,14 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           _idx: i,
           fecha,
           desc,
-          ars: Math.abs(ars),
+          ars: esRevision ? -Math.abs(ars) : Math.abs(ars), // reversiones = monto negativo
           esRevision,
           catExcel,
-          category: mapped?.category || "",
-          subcat: mapped?.subcat || "",
-          mapped: !!mapped,
+          category: esRevision ? "otros" : (mapped?.category || ""),
+          subcat: esRevision ? "Otros" : (mapped?.subcat || ""),
+          mapped: esRevision ? true : !!mapped, // reversiones no necesitan mapeo
           medio: cuentaSel?.nombre || "VISA",
-          incluir: !esRevision, // reversiones excluidas por defecto, el usuario puede tildarlas
+          incluir: true, // todas incluidas por defecto, reversiones también
         };
       }).filter(r => r.ars !== 0);
       setRows(parsed);
@@ -1224,7 +1256,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       .map(r => ({
         category: r.category,
         subcat: r.subcat,
-        amount: Math.abs(r.ars),
+        amount: r.ars, // puede ser negativo si es reversión
         moneda: "ARS",
         date: r.fecha,
         descripcion: r.desc,
@@ -1300,6 +1332,34 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           <p style={{ fontSize:11, color:"#999", margin:"8px 0 0" }}>
             Formato esperado: columnas Fecha, Descripcion, ARS, Tipo, Categoria — compatible con el Excel de Santander/VISA.
           </p>
+
+          {/* ── Resúmenes existentes ── */}
+          {cuentaId && (
+            <div style={{ marginTop:16, borderTop:"1px solid #f0f0f0", paddingTop:12 }}>
+              <p style={{ fontSize:12, fontWeight:500, color:"#666", margin:"0 0 8px" }}>
+                Resúmenes cargados para esta tarjeta:
+              </p>
+              {loadingResumenes
+                ? <p style={{ fontSize:12, color:"#999" }}>Cargando...</p>
+                : resumenes.length === 0
+                  ? <p style={{ fontSize:12, color:"#bbb" }}>No hay resúmenes cargados.</p>
+                  : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                    {resumenes.map(r => (
+                      <div key={r.mes} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", background:"#f9f9f9", borderRadius:8, border:"1px solid #eee" }}>
+                        <div>
+                          <span style={{ fontSize:13, fontWeight:500 }}>{r.mes}</span>
+                          <span style={{ fontSize:11, color:"#999", marginLeft:10 }}>{r.count} transacciones · {fmtARS(r.totalARS)}</span>
+                        </div>
+                        <button
+                          onClick={() => handleEliminarResumen(r.mes, r.ids)}
+                          style={{ fontSize:12, padding:"3px 10px", background:"none", border:"1px solid #e24b4a44", borderRadius:6, cursor:"pointer", color:"#e24b4a" }}
+                        >🗑 Eliminar</button>
+                      </div>
+                    ))}
+                  </div>
+              }
+            </div>
+          )}
         </div>
       )}
 
@@ -1313,7 +1373,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
                 : <span style={{ color:"#1d9e75", marginLeft:4 }}>✓ Todas mapeadas</span>
               }
               {rows.filter(r=>r.esRevision).length > 0 && (
-                <span style={{ color:"#888", marginLeft:8 }}>· {rows.filter(r=>r.esRevision).length} devoluciones excluidas (podés tildarlas si querés incluirlas)</span>
+                <span style={{ color:"#1d9e75", marginLeft:8 }}>· {rows.filter(r=>r.esRevision).length} reversiones incluidas (restan de la deuda) ↩</span>
               )}
             </div>
             <div style={{ display:"flex", gap:8 }}>
