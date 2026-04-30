@@ -1379,21 +1379,29 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         }
         if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
 
-        // Deduplicar items dentro de cada fila
-        // pdf.js a veces emite cada item dos veces con posiciones ligeramente distintas
-        const dedupedRows = rows.map(row => {
-          const seen = [];
-          return row.filter(item => {
-            // Si ya hay un item con el mismo texto cerca en X (±30px), es duplicado
-            const isDup = seen.some(s => s.str === item.str && Math.abs(s.x - item.x) < 30);
-            if (!isDup) seen.push(item);
-            return !isDup;
-          });
-        });
+        // El PDF del ICBC tiene dos capas de texto superpuestas → dedup en el texto final
+        const dedupLine = (line) => {
+          const t = line.trim();
+          if (!t) return t;
+          // Caso más común: línea empieza con fecha repetida "DD.MM.AA DD.MM.AA ..."
+          const doubleDateRe = /^(\d{2}\.\d{2}\.\d{2})\s+\1\s+/;
+          if (doubleDateRe.test(t)) {
+            // Tomar la primera mitad aproximada
+            const half = Math.ceil(t.length / 2);
+            return t.slice(0, half).trim();
+          }
+          // Caso general: buscar si la segunda mitad repite la primera
+          for (let split = Math.floor(t.length / 2); split >= 8; split--) {
+            const first = t.slice(0, split).trimEnd();
+            const rest = t.slice(split).trimStart();
+            if (rest === first) return first;
+            if (rest.startsWith(first)) return first;
+          }
+          return t;
+        };
 
-        // Convertir cada fila a texto
         const fullText = dedupedRows
-          .map(row => row.map(i => i.str).join(' '))
+          .map(row => dedupLine(row.map(i => i.str).join(' ')))
           .filter(line => line.trim())
           .join('\n');
 
