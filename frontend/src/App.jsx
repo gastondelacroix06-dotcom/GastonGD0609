@@ -1383,19 +1383,23 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         const dedupLine = (line) => {
           const t = line.trim();
           if (!t) return t;
-          // Caso más común: línea empieza con fecha repetida "DD.MM.AA DD.MM.AA ..."
-          const doubleDateRe = /^(\d{2}\.\d{2}\.\d{2})\s+\1\s+/;
-          if (doubleDateRe.test(t)) {
-            // Tomar la primera mitad aproximada
-            const half = Math.ceil(t.length / 2);
-            return t.slice(0, half).trim();
+          // Buscar si hay una fecha repetida: "DD.MM.AA ... DD.MM.AA ..."
+          // Quedarse con todo hasta la segunda aparición de la misma fecha
+          const dateRe = /(\d{2}\.\d{2}\.\d{2})/;
+          const firstDate = t.match(dateRe);
+          if (firstDate) {
+            const secondIdx = t.indexOf(firstDate[1], firstDate[1].length);
+            if (secondIdx > 0) {
+              return t.slice(0, secondIdx).trim();
+            }
           }
-          // Caso general: buscar si la segunda mitad repite la primera
-          for (let split = Math.floor(t.length / 2); split >= 8; split--) {
-            const first = t.slice(0, split).trimEnd();
-            const rest = t.slice(split).trimStart();
-            if (rest === first) return first;
-            if (rest.startsWith(first)) return first;
+          // Sin fecha repetida: caso de número de comprobante repetido
+          // "531406* 531406*" → detectar número repetido
+          const numRe = /(\d{6}[\w*]*)\s+\1/;
+          const numMatch = t.match(numRe);
+          if (numMatch) {
+            const secondIdx = t.indexOf(numMatch[1], numMatch.index + numMatch[1].length);
+            if (secondIdx > 0) return t.slice(0, secondIdx).trim();
           }
           return t;
         };
