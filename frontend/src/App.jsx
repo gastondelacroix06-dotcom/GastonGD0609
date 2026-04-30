@@ -1379,35 +1379,26 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         }
         if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
 
-        // Convertir cada fila a texto y parsear
-        // En el resumen ICBC las columnas son aproximadamente:
-        // FECHA(x<80) | COMPROBANTE(x<180) | DETALLE(x<420) | PESOS(x<520) | DOLARES(x>520)
-        // Unimos todo como texto por fila y dejamos que parsePDFText lo interprete
-        const fullText = rows
+        // Deduplicar items dentro de cada fila
+        // pdf.js a veces emite cada item dos veces con posiciones ligeramente distintas
+        const dedupedRows = rows.map(row => {
+          const seen = [];
+          return row.filter(item => {
+            // Si ya hay un item con el mismo texto cerca en X (±30px), es duplicado
+            const isDup = seen.some(s => s.str === item.str && Math.abs(s.x - item.x) < 30);
+            if (!isDup) seen.push(item);
+            return !isDup;
+          });
+        });
+
+        // Convertir cada fila a texto
+        const fullText = dedupedRows
           .map(row => row.map(i => i.str).join(' '))
           .filter(line => line.trim())
           .join('\n');
 
-        // pdf.js a veces duplica líneas — limpiar antes de parsear
-        const cleanText = fullText.split('\n').map(line => {
-          // Detectar línea duplicada: "DD.MM.DD DD.MM.DD ..." → tomar la primera mitad
-          const dateMatch = line.match(/^(\d{2}\.\d{2}\.\d{2}\s+.+?)\s+\1\s*$/);
-          if (dateMatch) return dateMatch[1];
-          // Detectar duplicación parcial por columnas: misma fecha repetida al inicio
-          const doubleDateMatch = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+\1\s+(.+?)\s+\2\s+([\d.,]+(?:-)?)\s+\3\s*$/);
-          if (doubleDateMatch) return `${doubleDateMatch[1]} ${doubleDateMatch[2]} ${doubleDateMatch[3]}`;
-          // Caso más común: "DD.MM.AA XXX* DESC DESC MONTO MONTO" → quitar segunda mitad
-          const halfLen = Math.floor(line.length / 2);
-          const firstHalf = line.slice(0, halfLen).trim();
-          const secondHalf = line.slice(halfLen).trim();
-          if (firstHalf && secondHalf && secondHalf.startsWith(firstHalf.slice(0, 10))) {
-            return firstHalf;
-          }
-          return line;
-        }).join('\n');
-
-        const parsed = parsePDFText(cleanText, medioNombre);
-        console.log('=== CLEAN TEXT (primeras líneas) ===\n', cleanText.slice(0, 2000));
+        const parsed = parsePDFText(fullText, medioNombre);
+        console.log('=== CLEAN TEXT ===\n', fullText.slice(0, 2000));
         console.log('=== PARSED ROWS ===', parsed.length);
         if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
         setRows(parsed);
