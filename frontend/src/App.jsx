@@ -1205,46 +1205,164 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
     setResumenes(p => p.filter(r => r.mes !== mes));
   };
 
+  // ── Parser de texto PDF del resumen ICBC VISA ──────────────────────
+  const parsePDFText = (text, medioNombre) => {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const results = [];
+
+    // Palabras que indican que la línea NO es un gasto
+    const SKIP_PREFIXES = [
+      'SALDO ANTERIOR','SU PAGO','DEV.IMP','INTERESES','DB IVA','IIBB',
+      'IVA RG','DB.RG','PAGO MINIMO','SALDO ACTUAL','TARJETA','PAGINA',
+      'TITULAR','Plan V','cuotas','TNA','TEA','TEM','CFT','CFTEA',
+      'DELACROIX','FECHA','LIMITE','VTO.','CIERRE','VENCIMIENTO',
+      'PROXIMO','PAGO MIN','LIMITES','40 OFF'
+    ];
+
+    // Regex para parsear línea de transacción del ICBC:
+    // DD.MM.AA [COMPROBANTE] DESCRIPCION [C.NN/NN] PESOS[-] [DOLARES]
+    const txRegex = /^(\d{2}\.\d{2}\.\d{2})\s+(\S+\*?)?\s*(.+?)\s+([\d.,]+)-?\s*$/;
+
+    for (const line of lines) {
+      const skip = SKIP_PREFIXES.some(p => line.toUpperCase().startsWith(p.toUpperCase()));
+      if (skip) continue;
+
+      const match = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+([\w*]+\s+)?(.+?)\s+([\d.,]+)(-?)\s*([\d.,]+)?(-?)?\s*$/);
+      if (!match) continue;
+
+      const [, fechaRaw, , detalle, montoPesos, signoP, montoDolares, signoD] = match;
+      const [dd, mm, aa] = fechaRaw.split('.');
+      const fecha = `20${aa}-${mm}-${dd}`;
+
+      // Monto en pesos — negativo si tiene '-' al final o es devolución
+      const rawPesos = parseFloat(montoPesos.replace(/\./g,'').replace(',','.')) || 0;
+      const esRevision = signoP === '-' || detalle.includes('DEV') || detalle.includes('DESCUENTO') || detalle.includes('40 OFF');
+      const ars = esRevision ? -rawPesos : rawPesos;
+
+      // Monto en dólares si existe
+      const usd = montoDolares ? parseFloat(montoDolares.replace(/\./g,'').replace(',','.')) : 0;
+
+      // Extraer info de cuotas: "C.04/06" → "Cuota 4/6"
+      const cuotaMatch = detalle.match(/C\.(\d+)\/(\d+)/);
+      const cuotaInfo = cuotaMatch ? ` [Cuota ${cuotaMatch[1]}/${cuotaMatch[2]}]` : '';
+      const descLimpia = detalle.replace(/C\.\d+\/\d+/,'').replace(/\s+/g,' ').trim();
+
+      // Mapeo por palabras clave del detalle
+      const mapped = mapearPorDetalle(descLimpia);
+
+      results.push({
+        _idx: results.length,
+        fecha,
+        desc: descLimpia + cuotaInfo,
+        ars,
+        usd,
+        esRevision,
+        catExcel: '',
+        category: esRevision ? 'otros' : (mapped?.category || ''),
+        subcat: esRevision ? 'Otros' : (mapped?.subcat || ''),
+        mapped: esRevision ? true : !!mapped,
+        medio: medioNombre,
+        incluir: true,
+      });
+    }
+    return results;
+  };
+
+  // Mapeo por palabras clave del detalle (para PDF donde no hay columna Categoria)
+  const mapearPorDetalle = (desc) => {
+    const d = desc.toUpperCase();
+    if (d.includes('PEDIDOSYA') || d.includes('RAPPI') || d.includes('CARREFOUR') || d.includes('MARKET') || d.includes('EXTRA') || d.includes('FREDDO') || d.includes('LUCCIANO') || d.includes('CONFITERIA') || d.includes('ENTREBOLLOS') || d.includes('SATIATA') || d.includes('GRANJA') || d.includes('RAPANUI') || d.includes('PANADER') || d.includes('PIZZ')) return { category:'hogar', subcat:'Comida' };
+    if (d.includes('SHELLBOX') || d.includes('NAFTA') || d.includes('YPF') || d.includes('SHELL') || d.includes('AXION')) return { category:'autos', subcat:'Tiguan Nafta' };
+    if (d.includes('AUBASA') || d.includes('AUSA') || d.includes('AUSOL') || d.includes('CORREDORES') || d.includes('PEAJE')) return { category:'autos', subcat:'Peajes' };
+    if (d.includes('BBVA SEGURO') || d.includes('SEGURO')) return { category:'hogar', subcat:'Seguro Hogar' };
+    if (d.includes('APPLE') || d.includes('GOOGLE') || d.includes('YOUTUBE') || d.includes('NETFLIX') || d.includes('SPOTIFY') || d.includes('DISNEY') || d.includes('HBO')) return { category:'hogar', subcat:'Nube' };
+    if (d.includes('MATERCELL')) return { category:'hogar', subcat:'Matercell' };
+    if (d.includes('MOVISTAR') || d.includes('CLARO') || d.includes('PERSONAL')) return { category:'hogar', subcat:'Movistar' };
+    if (d.includes('NATURGY') || d.includes('EDESUR') || d.includes('EDENOR') || d.includes('METROGAS')) return { category:'hogar', subcat:'Gas' };
+    if (d.includes('ARBA') || d.includes('MUNICIPAL') || d.includes('RENTAS') || d.includes('AGIP')) return { category:'hogar', subcat:'Impuesto Municipal' };
+    if (d.includes('MISHKA') || d.includes('KINDERLAND') || d.includes('WHITEBUTTERFL') || d.includes('BOKENPATIO')) return { category:'hijos', subcat:'Otros' };
+    if (d.includes('GIRO DIDACTICO') || d.includes('LIBRERIAS') || d.includes('LIBRER')) return { category:'hijos', subcat:'Otros' };
+    if (d.includes('CUORE') || d.includes('BABY') || d.includes('SOFIGLOBOS')) return { category:'hijos', subcat:'Otros' };
+    if (d.includes('RIP CURL') || d.includes('INDUMENT') || d.includes('ROPA') || d.includes('COLOMBRARO') || d.includes('MELI') || d.includes('MERCADOLIBRE')) return { category:'otros', subcat:'Compras Ropa' };
+    if (d.includes('CUOTA SOCIAL') || d.includes('CLUB') || d.includes('RIVER') || d.includes('ZENTRA') || d.includes('PROVEED')) return { category:'hijos', subcat:'Club Santa Barbara' };
+    return null;
+  };
+
   const handleFile = async (e) => {
     const f = e.target.files[0];
     if (!f || !cuentaId) { setMsg("Primero seleccioná la tarjeta."); return; }
     setMsg("Procesando...");
-    try {
-      const buf = await f.arrayBuffer();
-      // Parsear XLSX en el browser con SheetJS
-      const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs");
-      const wb = XLSX.read(buf, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    const cuentaSel = cuentas.find(c => String(c.id) === String(cuentaId));
+    const medioNombre = cuentaSel?.nombre || "VISA";
 
-      const cuentaSel = cuentas.find(c => String(c.id) === String(cuentaId));
-      const parsed = data.map((r, i) => {
-        const fecha = excelSerialToISO(r["Fecha"]) || String(r["Fecha"]);
-        const desc = r["Descripcion"] || r["Descripción"] || "";
-        const ars = parseFloat(r["ARS"]) || 0;
-        const catExcel = r["Categoria"] || r["Categoría"] || "";
-        const mapped = CATEGORIA_MAP[catExcel];
-        const tipo = r["Tipo"] || "";
-        const esRevision = tipo.toLowerCase().includes("reversion") || tipo.toLowerCase().includes("crédito") || ars < 0;
-        return {
-          _idx: i,
-          fecha,
-          desc,
-          ars: esRevision ? -Math.abs(ars) : Math.abs(ars), // reversiones = monto negativo
-          esRevision,
-          catExcel,
-          category: esRevision ? "otros" : (mapped?.category || ""),
-          subcat: esRevision ? "Otros" : (mapped?.subcat || ""),
-          mapped: esRevision ? true : !!mapped, // reversiones no necesitan mapeo
-          medio: cuentaSel?.nombre || "VISA",
-          incluir: true, // todas incluidas por defecto, reversiones también
-        };
-      }).filter(r => r.ars !== 0);
-      setRows(parsed);
-      setStep("preview");
-      setMsg("");
+    try {
+      const isPDF = f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
+
+      if (isPDF) {
+        // Leer el PDF como texto usando pdfjsLib
+        const buf = await f.arrayBuffer();
+        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.mjs";
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          // Reconstruir líneas agrupando items por posición Y
+          const items = content.items.map(item => ({ x: item.transform[4], y: item.transform[5], str: item.str }));
+          const byY = {};
+          items.forEach(item => {
+            const yKey = Math.round(item.y);
+            if (!byY[yKey]) byY[yKey] = [];
+            byY[yKey].push(item);
+          });
+          const lines = Object.entries(byY)
+            .sort(([a],[b]) => Number(b) - Number(a))
+            .map(([, items]) => items.sort((a,b) => a.x - b.x).map(i => i.str).join(' '));
+          fullText += lines.join('\n') + '\n';
+        }
+        const parsed = parsePDFText(fullText, medioNombre);
+        if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
+        setRows(parsed);
+        setStep("preview");
+        setMsg("");
+
+      } else {
+        // Excel — lógica original
+        const buf = await f.arrayBuffer();
+        const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs");
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+        const parsed = data.map((r, i) => {
+          const fecha = excelSerialToISO(r["Fecha"]) || String(r["Fecha"]);
+          const desc = r["Descripcion"] || r["Descripción"] || "";
+          const ars = parseFloat(r["ARS"]) || 0;
+          const catExcel = r["Categoria"] || r["Categoría"] || "";
+          const mapped = CATEGORIA_MAP[catExcel];
+          const tipo = r["Tipo"] || "";
+          const esRevision = tipo.toLowerCase().includes("reversion") || tipo.toLowerCase().includes("crédito") || ars < 0;
+          const cuotaMatch = desc.match(/C\.(\d+)\/(\d+)/);
+          const cuotaInfo = cuotaMatch ? ` [Cuota ${cuotaMatch[1]}/${cuotaMatch[2]}]` : '';
+          const descFinal = desc.replace(/C\.\d+\/\d+/,'').trim() + cuotaInfo;
+          return {
+            _idx: i, fecha, desc: descFinal,
+            ars: esRevision ? -Math.abs(ars) : Math.abs(ars),
+            esRevision, catExcel,
+            category: esRevision ? "otros" : (mapped?.category || ""),
+            subcat: esRevision ? "Otros" : (mapped?.subcat || ""),
+            mapped: esRevision ? true : !!mapped,
+            medio: medioNombre, incluir: true,
+          };
+        }).filter(r => r.ars !== 0);
+        setRows(parsed);
+        setStep("preview");
+        setMsg("");
+      }
     } catch (err) {
       setMsg("Error procesando el archivo: " + err.message);
+      console.error(err);
     }
     e.target.value = "";
   };
@@ -1320,17 +1438,17 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
             </div>
             <div style={{ display:"flex", alignItems:"flex-end" }}>
               <div style={{ width:"100%" }}>
-                <label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Archivo Excel (.xlsx)</label>
-                <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display:"none" }}/>
+                <label style={{ fontSize:12, color:"#666", display:"block", marginBottom:4 }}>Archivo Excel (.xlsx) o PDF</label>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls,.pdf" onChange={handleFile} style={{ display:"none" }}/>
                 <button onClick={()=>{ if(!cuentaId){setMsg("Primero seleccioná la tarjeta.");return;} fileRef.current.click(); }} style={{ width:"100%", padding:"7px 10px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:500 }}>
-                  📎 Subir archivo Excel
+                  📎 Subir Excel o PDF
                 </button>
               </div>
             </div>
           </div>
           {msg && <p style={{ fontSize:12, color:"#e24b4a", margin:0 }}>{msg}</p>}
           <p style={{ fontSize:11, color:"#999", margin:"8px 0 0" }}>
-            Formato esperado: columnas Fecha, Descripcion, ARS, Tipo, Categoria — compatible con el Excel de Santander/VISA.
+            Aceptamos PDF del resumen ICBC/VISA o Excel con columnas Fecha, Descripcion, ARS, Tipo, Categoria.
           </p>
 
           {/* ── Resúmenes existentes ── */}
