@@ -1215,13 +1215,13 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       'SALDO ANTERIOR','SU PAGO','DEV.IMP','PAGO MINIMO','SALDO ACTUAL','TARJETA','PAGINA',
       'TITULAR','Plan V','cuotas','TNA','TEA','TEM','CFT','CFTEA',
       'DELACROIX','FECHA','LIMITE','VTO.','CIERRE','VENCIMIENTO',
-      'PROXIMO','PAGO MIN','LIMITES','40 OFF'
+      'PROXIMO','PAGO MIN','LIMITES','40 OFF','TRANSFERENCIA DEUDA'
     ];
 
     // Líneas de impuestos/comisiones → van a Otros/Impuesto Tarjeta
     const IMPUESTO_KEYWORDS = [
-      'INTERESES FINANCIACION','INTERESES PUNIT','DB IVA','IIBB PERCEP',
-      'IVA RG','DB.RG','COMISION PAQUETE','COMISION','INTERES'
+      'INTERESES FINANCIACION','INTERESES PUNIT','PUNIT. PAG','PUNIT.PAG',
+      'DB IVA','IIBB PERCEP','IVA RG','DB.RG','COMISION PAQUETE','COMISION','INTERES'
     ];
 
     // Regex para parsear línea de transacción del ICBC:
@@ -1387,6 +1387,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           return {
             _idx: i, fecha, desc: descFinal,
             ars: esRevision ? -Math.abs(ars) : Math.abs(ars),
+            usd: 0,
             esRevision, catExcel,
             category: esRevision ? "otros" : (mapped?.category || ""),
             subcat: esRevision ? "Otros" : (mapped?.subcat || ""),
