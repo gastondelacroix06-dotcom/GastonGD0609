@@ -1383,23 +1383,38 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         const dedupLine = (line) => {
           const t = line.trim();
           if (!t) return t;
-          // Buscar si hay una fecha repetida: "DD.MM.AA ... DD.MM.AA ..."
-          // Quedarse con todo hasta la segunda aparición de la misma fecha
+
           const dateRe = /(\d{2}\.\d{2}\.\d{2})/;
           const firstDate = t.match(dateRe);
           if (firstDate) {
-            const secondIdx = t.indexOf(firstDate[1], firstDate[1].length);
+            const secondIdx = t.indexOf(firstDate[1], firstDate[1].length + 1);
             if (secondIdx > 0) {
-              return t.slice(0, secondIdx).trim();
+              // Tomar la primera parte (antes de la 2da fecha)
+              const firstPart = t.slice(0, secondIdx).trim();
+              // Extraer el monto del final de la línea completa
+              // Formato: número con puntos y coma, opcionalmente seguido de "-"
+              const montoRe = /([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*(?:[\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)?\s*$/;
+              const montoMatch = t.match(montoRe);
+              if (montoMatch && !firstPart.match(montoRe)) {
+                return firstPart + ' ' + montoMatch[1];
+              }
+              return firstPart;
             }
           }
-          // Sin fecha repetida: caso de número de comprobante repetido
-          // "531406* 531406*" → detectar número repetido
+          // Número de comprobante repetido sin fecha
           const numRe = /(\d{6}[\w*]*)\s+\1/;
           const numMatch = t.match(numRe);
           if (numMatch) {
             const secondIdx = t.indexOf(numMatch[1], numMatch.index + numMatch[1].length);
-            if (secondIdx > 0) return t.slice(0, secondIdx).trim();
+            if (secondIdx > 0) {
+              const firstPart = t.slice(0, secondIdx).trim();
+              const montoRe = /([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s*(?:[\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)?\s*$/;
+              const montoMatch = t.match(montoRe);
+              if (montoMatch && !firstPart.match(montoRe)) {
+                return firstPart + ' ' + montoMatch[1];
+              }
+              return firstPart;
+            }
           }
           return t;
         };
