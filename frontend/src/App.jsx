@@ -1293,7 +1293,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         fecha,
         desc: descLimpia + cuotaInfo,
         ars,
-        usd,
+        usd: rawUSD || 0,
         esRevision,
         catExcel: '',
         category: esRevision ? 'otros' : (mapped?.category || ''),
