@@ -1264,7 +1264,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         continue;
       }
 
-      const match = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+([\w*]+\s+)?(.+?)\s+([\d.,]+)(-?)\s*([\d.,]+)?(-?)?\s*$/);
+      const match = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+(\d{6}[\w*]*)?\s*(.+?)\s+([\d]{1,3}(?:\.[\d]{3})*,\d{2})(-?)\s*([\d]{1,3}(?:\.[\d]{3})*,\d{2})?(-?)?\s*$/);
       if (!match) continue;
 
       const [, fechaRaw, , detalle, montoPesos, signoP, montoDolares, signoD] = match;
@@ -1337,28 +1337,58 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const isPDF = f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
 
       if (isPDF) {
-        // Leer el PDF como texto usando pdfjsLib
         const buf = await f.arrayBuffer();
         const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs");
         pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.mjs";
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        let fullText = '';
+
+        // Recolectar todos los items de todas las páginas con su posición
+        let allItems = [];
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
+          const vp = page.getViewport({ scale: 1 });
           const content = await page.getTextContent();
-          // Reconstruir líneas agrupando items por posición Y
-          const items = content.items.map(item => ({ x: item.transform[4], y: item.transform[5], str: item.str }));
-          const byY = {};
-          items.forEach(item => {
-            const yKey = Math.round(item.y);
-            if (!byY[yKey]) byY[yKey] = [];
-            byY[yKey].push(item);
+          // Normalizar Y: en PDF Y crece hacia arriba, lo invertimos por página
+          content.items.forEach(item => {
+            allItems.push({
+              x: Math.round(item.transform[4]),
+              y: Math.round(vp.height - item.transform[5]), // Y desde arriba
+              str: item.str.trim(),
+              page: i,
+            });
           });
-          const lines = Object.entries(byY)
-            .sort(([a],[b]) => Number(b) - Number(a))
-            .map(([, items]) => items.sort((a,b) => a.x - b.x).map(i => i.str).join(' '));
-          fullText += lines.join('\n') + '\n';
         }
+
+        // Agrupar items en filas usando tolerancia de ±4px en Y
+        allItems.sort((a, b) => a.page !== b.page ? a.page - b.page : a.y !== b.y ? a.y - b.y : a.x - b.x);
+        const rows = [];
+        let currentRow = [];
+        let currentY = null;
+        let currentPage = null;
+        for (const item of allItems) {
+          if (!item.str) continue;
+          if (currentY === null || (item.page === currentPage && Math.abs(item.y - currentY) <= 4)) {
+            currentRow.push(item);
+            currentY = item.y;
+            currentPage = item.page;
+          } else {
+            if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
+            currentRow = [item];
+            currentY = item.y;
+            currentPage = item.page;
+          }
+        }
+        if (currentRow.length) rows.push(currentRow.sort((a,b) => a.x - b.x));
+
+        // Convertir cada fila a texto y parsear
+        // En el resumen ICBC las columnas son aproximadamente:
+        // FECHA(x<80) | COMPROBANTE(x<180) | DETALLE(x<420) | PESOS(x<520) | DOLARES(x>520)
+        // Unimos todo como texto por fila y dejamos que parsePDFText lo interprete
+        const fullText = rows
+          .map(row => row.map(i => i.str).join(' '))
+          .filter(line => line.trim())
+          .join('\n');
+
         const parsed = parsePDFText(fullText, medioNombre);
         if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
         setRows(parsed);
