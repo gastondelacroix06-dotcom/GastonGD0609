@@ -6,9 +6,8 @@ import { getBlueRate, getLatestBlueRate, getLatestBlueDate, mergeBlueData, parse
 // ─── CONSTANTES ────────────────────────────────────────────────────────────────
 
 const DEFAULT_CATEGORIES = {
-  hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Expensas","Seguro Hogar","Alquiler","Otros"] },
-  Actividades: { label:"Actividades", icon:"🎯", color:"#3266ad", subcats:["Tenis","Futbol","Hockey","Gimnasia Artistica","Otros"] },
-  autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Tiguan - Seguro","VW Tiguan - Combustible","VW Tiguan - Mecánico","VW Tiguan - Service","HRV - Seguro","HRV - Combustible","HRV - Mecánico","HRV - Service"] },
+  hogar: { label:"Hogar", icon:"🏠", color:"#3266ad", subcats:["Luz","Gas","Agua","Internet","TV Streaming","Impuesto Municipal","Impuesto Provincial","Seguro Hogar","Vigilancia","Monitoreo de Puerta","Otros"] },
+  autos: { label:"Autos", icon:"🚗", color:"#d85a30", subcats:["VW Polo - Seguro","VW Polo - Combustible","VW Polo - Mecánico","VW Polo - Service","VW Gol - Seguro","VW Gol - Combustible","VW Gol - Mecánico","VW Gol - Service"] },
   hijos: { label:"Hijos", icon:"🧑‍🧑‍🧒‍🧒", color:"#1d9e75", subcats:["Colegio","Actividades","Otros"] }
 };
 
@@ -1390,6 +1389,8 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           .join('\n');
 
         const parsed = parsePDFText(fullText, medioNombre);
+        console.log('=== PDF TEXT ===\n', fullText.slice(0, 5000));
+        console.log('=== PARSED ROWS ===', parsed.length, parsed.slice(0,5));
         if (!parsed.length) { setMsg("No se encontraron transacciones en el PDF. Verificá el formato."); return; }
         setRows(parsed);
         setStep("preview");
