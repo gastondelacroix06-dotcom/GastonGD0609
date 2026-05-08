@@ -1372,71 +1372,65 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const isPDF = f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
 
       if (isPDF) {
-        setMsg("Enviando al servidor para procesar...");
+        setMsg("Procesando PDF...");
         const buf = await f.arrayBuffer();
-        // btoa con spread falla en PDFs grandes → usar chunks
-        const bytes = new Uint8Array(buf);
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-        }
-        const base64 = btoa(binary);
+        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.mjs";
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-        // Despertar backend — esperar hasta 40 segundos que responda
-        setMsg("Despertando servidor...");
-        let backendOk = false;
-        for (let i = 0; i < 8; i++) {
-          try {
-            const ping = await fetch(`${API_URL}/`, { signal: AbortSignal.timeout(6000) });
-            if (ping.ok) { backendOk = true; break; }
-          } catch {}
-          setMsg(`Despertando servidor... (${(i+1)*6}s)`);
-          await new Promise(r => setTimeout(r, 5000));
-        }
-        if (!backendOk) { setMsg("El servidor no responde. Intentá de nuevo en un minuto."); return; }
-
-        let resultado = null;
-        for (let intento = 1; intento <= 3; intento++) {
-          try {
-            setMsg(`Procesando con IA... (intento ${intento}/3)`);
-            const resp = await fetch(`${API_URL}/api/parse-resumen`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ base64, mediaType: "application/pdf" }),
-              signal: AbortSignal.timeout(120000),
+        // Recolectar todos los items con posición
+        const allItems = [];
+        for (let p = 1; p <= pdf.numPages; p++) {
+          const page = await pdf.getPage(p);
+          const vp = page.getViewport({ scale: 1 });
+          const content = await page.getTextContent();
+          content.items.forEach(item => {
+            if (!item.str.trim()) return;
+            allItems.push({
+              x: item.transform[4],
+              y: Math.round(vp.height - item.transform[5]),
+              str: item.str.trim(),
+              page: p,
+              w: vp.width,
             });
-            resultado = await resp.json();
-            if (!resultado.error) break;
-          } catch {
-            if (intento < 3) await new Promise(r => setTimeout(r, 4000));
+          });
+        }
+
+        // El PDF del ICBC tiene dos capas idénticas
+        // La capa derecha (duplicada) empieza en x > pageWidth/2
+        // Filtrar solo items de la mitad izquierda + columna de montos (~x > pageWidth*0.65)
+        // Los montos están en x ~420-500 en página de 595px → ~0.70-0.84
+        // La segunda capa duplica el texto a partir de x ~300 (~0.50)
+        // Estrategia: tomar solo x < pageWidth*0.52 O x > pageWidth*0.65 (montos reales)
+        const filtered = allItems.filter(item => {
+          const relX = item.x / item.w;
+          return relX < 0.52 || relX > 0.65;
+        });
+
+        // Agrupar en filas por Y ±3px
+        filtered.sort((a,b) => a.page !== b.page ? a.page-b.page : a.y !== b.y ? a.y-b.y : a.x-b.x);
+        const rows = [];
+        let cur = [], curY = null, curP = null;
+        for (const item of filtered) {
+          if (curY === null || (item.page === curP && Math.abs(item.y - curY) <= 3)) {
+            cur.push(item); curY = item.y; curP = item.page;
+          } else {
+            if (cur.length) rows.push(cur);
+            cur = [item]; curY = item.y; curP = item.page;
           }
         }
+        if (cur.length) rows.push(cur);
 
-        if (!resultado || resultado.error) {
-          setMsg("Error del servidor: " + (resultado?.error || "sin respuesta"));
-          return;
-        }
+        const fullText = rows
+          .map(row => row.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' '))
+          .filter(l => l.trim())
+          .join('\n');
 
-        const cuentaSel = cuentas.find(c => String(c.id) === String(cuentaId));
-        const medioNombre = cuentaSel?.nombre || "VISA";
-
-        const parsed = (resultado.transacciones || []).map((t, i) => {
-          const mapped = mapearPorCategoria(t.categoria_sugerida, t.descripcion);
-          return {
-            _idx: i,
-            fecha: t.fecha,
-            desc: t.descripcion,
-            ars: t.es_reversion ? -Math.abs(t.monto_ars) : Math.abs(t.monto_ars),
-            esRevision: t.es_reversion,
-            catExcel: t.categoria_sugerida,
-            category: t.es_reversion ? "otros" : (mapped?.category || ""),
-            subcat: t.es_reversion ? "Otros" : (mapped?.subcat || ""),
-            mapped: t.es_reversion ? true : !!mapped,
-            medio: medioNombre,
-            incluir: true,
-          };
-        });
+        const parsed = parsePDFText(fullText, medioNombre);
+        if (!parsed.length) { setMsg("No se encontraron transacciones. Verificá el formato."); return; }
+        setRows(parsed);
+        setStep("preview");
+        setMsg("");
 
         if (!parsed.length) { setMsg("No se encontraron transacciones."); return; }
         setRows(parsed);
