@@ -17,7 +17,7 @@ app.post("/api/analyze", async (req, res) => {
   try {
     const isImg = mediaType.startsWith("image/");
     const msg = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5",
       max_tokens: 1000,
       messages: [{
         role: "user",
@@ -44,7 +44,7 @@ app.post("/api/parse-resumen", async (req, res) => {
   if (!base64 || !mediaType) return res.status(400).json({ error: "Faltan datos" });
   try {
     const msg = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5",
       max_tokens: 4000,
       messages: [{
         role: "user",
