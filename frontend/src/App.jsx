@@ -1603,8 +1603,15 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
                 : <span style={{ color:"#1d9e75", marginLeft:4 }}>✓ Todas mapeadas</span>
               }
               {rows.filter(r=>r.esRevision).length > 0 && (
-                <span style={{ color:"#1d9e75", marginLeft:8 }}>· {rows.filter(r=>r.esRevision).length} reversiones incluidas (restan de la deuda) ↩</span>
+                <span style={{ color:"#1d9e75", marginLeft:8 }}>· {rows.filter(r=>r.esRevision).length} reversiones ↩</span>
               )}
+              <span style={{ color:"#666", marginLeft:8 }}>·</span>
+              <span style={{ fontWeight:600, color:"#3266ad", marginLeft:8 }}>
+                Total: {fmtARS(rows.filter(r=>r.incluir).reduce((s,r)=>s+r.ars,0))}
+              </span>
+              <span style={{ color:"#999", fontSize:11, marginLeft:8 }}>
+                (gastos {fmtARS(rows.filter(r=>r.incluir&&r.ars>0).reduce((s,r)=>s+r.ars,0))} — reversiones {fmtARS(Math.abs(rows.filter(r=>r.incluir&&r.ars<0).reduce((s,r)=>s+r.ars,0)))})
+              </span>
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={()=>setStep("upload")} style={{ fontSize:12, padding:"5px 12px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>← Volver</button>
