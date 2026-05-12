@@ -1332,24 +1332,6 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
     return { rows: results, conciliacion: { saldoAnterior, saldoActual, totalPagos, totalTransferencia } };
   };
 
-      results.push({
-        _idx: results.length,
-        fecha,
-        desc: descLimpia + cuotaInfo,
-        ars,
-        usd: rawUSD || 0,
-        esRevision,
-        catExcel: '',
-        category: esRevision ? 'otros' : (mapped?.category || ''),
-        subcat: esRevision ? 'Otros' : (mapped?.subcat || ''),
-        mapped: esRevision ? true : !!mapped,
-        medio: medioNombre,
-        incluir: true,
-      });
-    }
-    return results;
-  };
-
   // Mapeo desde categoría sugerida por Claude (para PDF vía backend)
   const mapearPorCategoria = (cat, desc) => {
     const c = (cat || "").toLowerCase();
