@@ -1168,6 +1168,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
   const [cuentaId, setCuentaId] = useState("");
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
+  const [conciliacion, setConciliacion] = useState(null);
   const [resumenes, setResumenes] = useState([]); // períodos cargados por tarjeta
   const [loadingResumenes, setLoadingResumenes] = useState(false);
   const fileRef = useRef();
@@ -1209,65 +1210,77 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const results = [];
 
-    // Palabras que indican que la línea NO es un gasto
+    // Datos de conciliación
+    let saldoAnterior = null, saldoActual = null;
+    let totalPagos = 0, totalTransferencia = 0;
+
     const SKIP_PREFIXES = [
-      'SALDO ANTERIOR','SU PAGO','DEV.IMP','PAGO MINIMO','SALDO ACTUAL','TARJETA','PAGINA',
-      'TITULAR','Plan V','cuotas','TNA','TEA','TEM','CFT','CFTEA',
+      'TARJETA','PAGINA','TITULAR','Plan V','cuotas','TNA','TEA','TEM','CFT','CFTEA',
       'DELACROIX','FECHA','LIMITE','VTO.','CIERRE','VENCIMIENTO',
-      'PROXIMO','PAGO MIN','LIMITES','40 OFF','TRANSFERENCIA DEUDA'
+      'PROXIMO','PAGO MIN','LIMITES','40 OFF',
     ];
 
-    // Líneas de impuestos/comisiones → van a Otros/Impuesto Tarjeta
-    const IMPUESTO_KEYWORDS = [
-      'INTERESES FINANCIACION','INTERESES PUNIT','PUNIT. PAG','PUNIT.PAG',
-      'DB IVA','IIBB PERCEP','IVA RG','DB.RG','COMISION PAQUETE','COMISION','INTERES'
-    ];
-
-    // Regex para parsear línea de transacción del ICBC:
-    // DD.MM.AA [COMPROBANTE] DESCRIPCION [C.NN/NN] PESOS[-] [DOLARES]
-    const txRegex = /^(\d{2}\.\d{2}\.\d{2})\s+(\S+\*?)?\s*(.+?)\s+([\d.,]+)-?\s*$/;
-
-    // Líneas que son impuestos/comisiones → van a otros/Impuesto Tarjeta
     const IMPUESTO_KEYS = [
       'INTERESES FINANCIACION','PUNIT','DB IVA','IIBB PERCEP',
       'IVA RG','DB.RG','COMISION PAQUETE','COMISION',
     ];
 
+    const parseMonto = (s) => parseFloat((s||'').replace(/\./g,'').replace(',','.')) || 0;
+
     for (let lineRaw of lines) {
-      // Deduplicar líneas con fecha/comprobante repetido por doble capa del PDF
-      // Patrón: "DD.MM.AA DD.MM.AA 123456* 123456* DETALLE DETALLE MONTO MONTO"
+      // Deduplicar líneas con fecha repetida por doble capa del PDF
       const dupFechaMatch = lineRaw.match(/^(\d{2}\.\d{2}\.\d{2})\s+\1\s+(.*)$/);
       if (dupFechaMatch) {
-        // Tomar la segunda mitad que tiene comprobante+detalle+monto
         const rest = dupFechaMatch[2];
-        // La segunda mitad también puede estar duplicada: "123* 123* DESC DESC MONTO MONTO"
-        // Limpiar comprobante duplicado
-        const cleanRest = rest.replace(/^(\d{6}[\w*]*)\s+\1\s+/, '$1 ')
-                              .replace(/^(\S+)\s+\1\s+/, '$1 ');
-        // El monto aparece duplicado al final: "38.150,00 38.150,00" → "38.150,00"
+        const cleanRest = rest.replace(/^(\d{6}[\w*]*)\s+\1\s+/, '$1 ').replace(/^(\S+)\s+\1\s+/, '$1 ');
         const cleanMonto = cleanRest.replace(/([\d]{1,3}(?:\.[\d]{3})*,\d{2}-?)\s+\1\s*$/, '$1');
-        // El detalle también puede estar duplicado en el medio
-        const halfLen = Math.ceil(cleanMonto.length / 2);
-        const firstHalf = cleanMonto.slice(0, halfLen);
-        const secondHalf = cleanMonto.slice(halfLen).trim();
-        lineRaw = secondHalf && firstHalf.trim().endsWith(secondHalf.split(' ')[0])
-          ? dupFechaMatch[1] + ' ' + firstHalf.trim()
-          : dupFechaMatch[1] + ' ' + cleanMonto;
+        lineRaw = dupFechaMatch[1] + ' ' + cleanMonto;
       }
       const line = lineRaw;
       const lineUp = line.toUpperCase();
+
+      // ── Extraer datos de conciliación ──
+      // Saldo anterior
+      if (lineUp.startsWith('SALDO ANTERIOR')) {
+        const m = line.match(/([\d.]+,\d{2})/);
+        if (m && !saldoAnterior) saldoAnterior = parseMonto(m[1]);
+        continue;
+      }
+      // Saldo actual
+      if (lineUp.startsWith('SALDO ACTUAL')) {
+        const m = line.match(/([\d.]+,\d{2})/);
+        if (m) saldoActual = parseMonto(m[1]);
+        continue;
+      }
+      // Pagos
+      if (lineUp.startsWith('SU PAGO')) {
+        const m = line.match(/([\d.]+,\d{2})-/);
+        if (m) totalPagos += parseMonto(m[1]);
+        continue;
+      }
+      // Transferencia de deuda (convierte USD a ARS)
+      if (lineUp.startsWith('TRANSFERENCIA DEUDA')) {
+        const m = line.match(/([\d.]+,\d{2})\s*$/);
+        if (m) totalTransferencia += parseMonto(m[1]);
+        continue;
+      }
+      // DEV.IMP (devolución de impuesto → es ingreso, monto negativo)
+      if (lineUp.startsWith('DEV.IMP')) {
+        const m = line.match(/([\d.]+,\d{2})-/);
+        if (m) { totalPagos += parseMonto(m[1]); continue; }
+        continue;
+      }
+
       const skip = SKIP_PREFIXES.some(p => lineUp.startsWith(p.toUpperCase()));
       if (skip) continue;
 
-      // Detectar si es una línea de impuesto/comisión (no empieza con fecha pero tiene monto)
+      // Impuestos/comisiones
       const esImpuesto = IMPUESTO_KEYS.some(k => lineUp.includes(k));
       if (esImpuesto) {
-        // Extraer monto — buscar número con formato argentino al final
         const montoMatch = line.match(/([\d.]+,\d{2})\s*$/);
         if (montoMatch) {
-          const monto = parseFloat(montoMatch[1].replace(/\./g,'').replace(',','.'));
+          const monto = parseMonto(montoMatch[1]);
           if (monto > 0) {
-            // Buscar fecha en la línea o usar la fecha del último item procesado
             const fechaMatch = line.match(/(\d{2}\.\d{2}\.\d{2})/);
             const fecha = fechaMatch
               ? `20${fechaMatch[1].split('.')[2]}-${fechaMatch[1].split('.')[1]}-${fechaMatch[1].split('.')[0]}`
@@ -1275,7 +1288,7 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
             results.push({
               _idx: results.length, fecha,
               desc: line.replace(/[\d.,]+\s*$/, '').trim().slice(0, 80),
-              ars: monto, usd: 0, esRevision: false, catExcel: '',
+              ars: monto, usd: 0, esRevision: false, catExcel: 'impuesto_tarjeta',
               category: 'otros', subcat: 'Impuesto Tarjeta',
               mapped: true, medio: medioNombre, incluir: true,
             });
@@ -1287,26 +1300,37 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const match = line.match(/^(\d{2}\.\d{2}\.\d{2})\s+(\d{6}[\w*]*)?\s*(.+?)\s+([\d]{1,3}(?:\.[\d]{3})*,\d{2})(-?)\s*([\d]{1,3}(?:\.[\d]{3})*,\d{2})?(-?)?\s*$/);
       if (!match) continue;
 
-      const [, fechaRaw, , detalle, montoPesos, signoP, montoDolares, signoD] = match;
+      const [, fechaRaw, , detalle, montoPesos, signoP, montoDolares] = match;
       const [dd, mm, aa] = fechaRaw.split('.');
       const fecha = `20${aa}-${mm}-${dd}`;
 
-      const rawPesos = parseFloat(montoPesos.replace(/\./g,'').replace(',','.')) || 0;
-      const rawUSD = montoDolares ? parseFloat(montoDolares.replace(/\./g,'').replace(',','.')) : 0;
+      const rawPesos = parseMonto(montoPesos);
+      const rawUSD = montoDolares ? parseMonto(montoDolares) : 0;
 
-      // Gasto en USD puro (pesos = USD) → viene convertido en el próximo resumen, ignorar
       if (rawUSD > 0 && Math.abs(rawPesos - rawUSD) < 0.01) continue;
 
-      const esRevision = signoP === '-' || detalle.includes('DEV') || detalle.includes('DESCUENTO') || detalle.includes('40 OFF');
+      const esRevision = signoP === '-' || detalle.toUpperCase().includes('40 OFF');
       const ars = esRevision ? -rawPesos : rawPesos;
 
-      // Extraer info de cuotas: "C.04/06" → "Cuota 4/6"
       const cuotaMatch = detalle.match(/C\.(\d+)\/(\d+)/);
       const cuotaInfo = cuotaMatch ? ` [Cuota ${cuotaMatch[1]}/${cuotaMatch[2]}]` : '';
       const descLimpia = detalle.replace(/C\.\d+\/\d+/,'').replace(/\s+/g,' ').trim();
 
-      // Mapeo por palabras clave del detalle
       const mapped = mapearPorDetalle(descLimpia);
+
+      results.push({
+        _idx: results.length, fecha,
+        desc: descLimpia + cuotaInfo,
+        ars, usd: rawUSD || 0, esRevision, catExcel: '',
+        category: esRevision ? 'otros' : (mapped?.category || ''),
+        subcat: esRevision ? 'Otros' : (mapped?.subcat || ''),
+        mapped: esRevision ? true : !!mapped,
+        medio: medioNombre, incluir: true,
+      });
+    }
+
+    return { rows: results, conciliacion: { saldoAnterior, saldoActual, totalPagos, totalTransferencia } };
+  };
 
       results.push({
         _idx: results.length,
@@ -1426,9 +1450,10 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
           .filter(l => l.trim())
           .join('\n');
 
-        const parsed = parsePDFText(fullText, medioNombre);
-        if (!parsed.length) { setMsg("No se encontraron transacciones. Verificá el formato."); return; }
-        setRows(parsed);
+        const result = parsePDFText(fullText, medioNombre);
+        if (!result.rows.length) { setMsg("No se encontraron transacciones. Verificá el formato."); return; }
+        setRows(result.rows);
+        setConciliacion(result.conciliacion);
         setStep("preview");
         setMsg("");
 
@@ -1615,11 +1640,42 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={()=>setStep("upload")} style={{ fontSize:12, padding:"5px 12px", background:"none", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>← Volver</button>
-              <button onClick={handleImport} disabled={sinMapear>0&&rows.some(r=>r.incluir&&!r.category)} style={{ fontSize:13, padding:"6px 16px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>
-                Importar {total} transacciones →
+              <button onClick={handleImport} style={{ fontSize:13, padding:"6px 16px", background:"#f5f5f5", border:"1px solid #ddd", borderRadius:8, cursor:"pointer", color:"#666" }}>
+                Importar sin categorizar
+              </button>
+              <button onClick={handleImport} style={{ fontSize:13, padding:"6px 16px", background:"#d85a30", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:500 }}>
+                Importar {total} →
               </button>
             </div>
           </div>
+
+          {/* ── Panel de conciliación ── */}
+          {conciliacion && conciliacion.saldoActual && (
+            (() => {
+              const { saldoAnterior, saldoActual, totalPagos, totalTransferencia } = conciliacion;
+              const totalTx = rows.filter(r=>r.incluir).reduce((s,r)=>s+r.ars, 0);
+              const saldoCalculado = (saldoAnterior||0) - totalPagos + totalTransferencia + totalTx;
+              const diferencia = Math.abs(saldoCalculado - saldoActual);
+              const ok = diferencia < 10;
+              return (
+                <div style={{ marginBottom:10, padding:"10px 14px", borderRadius:8, background: ok?"#f0faf5":"#fff8f0", border:`1px solid ${ok?"#1d9e7544":"#f0a03044"}` }}>
+                  <div style={{ fontSize:13, fontWeight:500, color: ok?"#0f6e56":"#c0601a", marginBottom:6 }}>
+                    {ok ? "✓ Conciliación correcta" : "⚠️ Diferencia en conciliación — puede haber transacciones faltantes"}
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, fontSize:12 }}>
+                    <div><span style={{ color:"#666" }}>Saldo anterior</span><br/><strong>{fmtARS(saldoAnterior||0)}</strong></div>
+                    <div><span style={{ color:"#666" }}>− Pagos</span><br/><strong style={{color:"#1d9e75"}}>{fmtARS(totalPagos)}</strong></div>
+                    <div><span style={{ color:"#666" }}>+ Transacciones</span><br/><strong style={{color:"#e24b4a"}}>{fmtARS(totalTx)}</strong></div>
+                    <div><span style={{ color:"#666" }}>= Saldo calculado</span><br/><strong style={{color: ok?"#0f6e56":"#c0601a"}}>{fmtARS(saldoCalculado)}</strong></div>
+                  </div>
+                  <div style={{ marginTop:6, fontSize:12, color:"#666" }}>
+                    Saldo actual en PDF: <strong>{fmtARS(saldoActual)}</strong>
+                    {!ok && <span style={{ color:"#e24b4a", marginLeft:8 }}>Diferencia: {fmtARS(diferencia)}</span>}
+                  </div>
+                </div>
+              );
+            })()
+          )}
           <div style={{ maxHeight:400, overflowY:"auto", border:"1px solid #eee", borderRadius:8 }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead style={{ position:"sticky", top:0, background:"#f9f9f9" }}>
@@ -1651,11 +1707,11 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
                           value={`${r.category}|${r.subcat}`}
                           onChange={e=>{
                             const [cat,sub]=e.target.value.split("|");
-                            setRows(p=>p.map((x,j)=>j===i?{...x,category:cat,subcat:sub,mapped:true}:x));
+                            setRows(p=>p.map((x,j)=>j===i?{...x,category:cat,subcat:sub,mapped:cat!==""}:x));
                           }}
                           style={{ width:"100%", padding:"3px 6px", borderRadius:6, border:`1px solid ${r.mapped?"#ddd":"#e24b4a"}`, fontSize:11, background: r.mapped?"#fff":"#fff0f0" }}
                         >
-                          <option value="|">⚠️ Sin categoría — seleccioná</option>
+                          <option value="|">— Sin categoría —</option>
                           {allSubcats.map(s=><option key={`${s.category}|${s.subcat}`} value={`${s.category}|${s.subcat}`}>{s.label}</option>)}
                         </select>
                       ) : <span style={{ color:"#ccc", fontSize:11 }}>—</span>}
