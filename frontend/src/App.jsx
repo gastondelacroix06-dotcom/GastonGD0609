@@ -1241,34 +1241,36 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const lineUp = line.toUpperCase();
 
       // ── Extraer datos de conciliación ──
-      // Saldo anterior
-      if (lineUp.startsWith('SALDO ANTERIOR')) {
-        const m = line.match(/([\d.]+,\d{2})/);
+      // Saldo anterior — puede venir como "SALDO ANTERIOR" o con fecha previa
+      if (lineUp.includes('SALDO ANTERIOR') && !lineUp.includes('VTO')) {
+        const m = line.match(/([\d]{1,3}(?:\.[\d]{3})*,\d{2})/);
         if (m && !saldoAnterior) saldoAnterior = parseMonto(m[1]);
         continue;
       }
       // Saldo actual
-      if (lineUp.startsWith('SALDO ACTUAL')) {
-        const m = line.match(/([\d.]+,\d{2})/);
+      if (lineUp.includes('SALDO ACTUAL')) {
+        const m = line.match(/([\d]{1,3}(?:\.[\d]{3})*,\d{2})/);
         if (m) saldoActual = parseMonto(m[1]);
         continue;
       }
-      // Pagos
-      if (lineUp.startsWith('SU PAGO')) {
-        const m = line.match(/([\d.]+,\d{2})-/);
+      // Pagos — "DD.MM.AA SU PAGO EN PESOS 3.500.000,00- 0,00"
+      if (lineUp.includes('SU PAGO')) {
+        // Tomar el primer monto seguido de "-"
+        const m = line.match(/([\d]{1,3}(?:\.[\d]{3})*,\d{2})-/);
         if (m) totalPagos += parseMonto(m[1]);
         continue;
       }
-      // Transferencia de deuda (convierte USD a ARS)
-      if (lineUp.startsWith('TRANSFERENCIA DEUDA')) {
-        const m = line.match(/([\d.]+,\d{2})\s*$/);
+      // Transferencia de deuda
+      if (lineUp.includes('TRANSFERENCIA DEUDA')) {
+        // Tomar el monto en pesos (primer monto de la línea, no el TC)
+        const m = line.match(/TC[\d.,]+\s+([\d]{1,3}(?:\.[\d]{3})*,\d{2})/);
         if (m) totalTransferencia += parseMonto(m[1]);
         continue;
       }
-      // DEV.IMP (devolución de impuesto → es ingreso, monto negativo)
-      if (lineUp.startsWith('DEV.IMP')) {
-        const m = line.match(/([\d.]+,\d{2})-/);
-        if (m) { totalPagos += parseMonto(m[1]); continue; }
+      // DEV.IMP — devolución de impuesto, reduce lo que debés
+      if (lineUp.includes('DEV.IMP')) {
+        const m = line.match(/([\d]{1,3}(?:\.[\d]{3})*,\d{2})-/);
+        if (m) totalPagos += parseMonto(m[1]);
         continue;
       }
 
