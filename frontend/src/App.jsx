@@ -1446,11 +1446,6 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
         setStep("preview");
         setMsg("");
 
-        if (!parsed.length) { setMsg("No se encontraron transacciones."); return; }
-        setRows(parsed);
-        setStep("preview");
-        setMsg("");
-
         // Recolectar todos los items de todas las páginas con su posición
       } else {
         // Excel — lógica original
