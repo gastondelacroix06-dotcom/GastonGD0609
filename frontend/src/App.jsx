@@ -1222,7 +1222,8 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
 
     const IMPUESTO_KEYS = [
       'INTERESES FINANCIACION','PUNIT','DB IVA','IIBB PERCEP',
-      'IVA RG','DB.RG','COMISION PAQUETE','COMISION',
+      'IVA RG','DB.RG','COMISION PAQUETE','COMISION PAQUETE',
+      'COMISION','INTERES FINANC',
     ];
 
     const parseMonto = (s) => parseFloat((s||'').replace(/\./g,'').replace(',','.')) || 0;
@@ -1274,10 +1275,11 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
       const skip = SKIP_PREFIXES.some(p => lineUp.startsWith(p.toUpperCase()));
       if (skip) continue;
 
-      // Impuestos/comisiones
+      // Impuestos/comisiones — pueden tener fecha al inicio y dos montos al final
       const esImpuesto = IMPUESTO_KEYS.some(k => lineUp.includes(k));
       if (esImpuesto) {
-        const montoMatch = line.match(/([\d.]+,\d{2})\s*$/);
+        // Extraer primer monto (pesos) — ignorar el segundo (dólares = 0,00)
+        const montoMatch = line.match(/([\d]{1,3}(?:\.[\d]{3})*,\d{2})/);
         if (montoMatch) {
           const monto = parseMonto(montoMatch[1]);
           if (monto > 0) {
@@ -1285,9 +1287,14 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
             const fecha = fechaMatch
               ? `20${fechaMatch[1].split('.')[2]}-${fechaMatch[1].split('.')[1]}-${fechaMatch[1].split('.')[0]}`
               : (results.length ? results[results.length-1].fecha : new Date().toISOString().slice(0,10));
+            const desc = line
+              .replace(/\d{2}\.\d{2}\.\d{2}\s*/, '')
+              .replace(/[\d.]+,\d{2}\s*/g, '')
+              .replace(/\$\s*/g, '')
+              .replace(/\(\s*[\d.,]+\s*\)/g, '')
+              .trim().slice(0, 80) || 'Impuesto/Comisión';
             results.push({
-              _idx: results.length, fecha,
-              desc: line.replace(/[\d.,]+\s*$/, '').trim().slice(0, 80),
+              _idx: results.length, fecha, desc,
               ars: monto, usd: 0, esRevision: false, catExcel: 'impuesto_tarjeta',
               category: 'otros', subcat: 'Impuesto Tarjeta',
               mapped: true, medio: medioNombre, incluir: true,
