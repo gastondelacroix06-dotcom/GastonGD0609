@@ -1323,7 +1323,17 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
 
       const cuotaMatch = detalle.match(/C\.(\d+)\/(\d+)/);
       const cuotaInfo = cuotaMatch ? ` [Cuota ${cuotaMatch[1]}/${cuotaMatch[2]}]` : '';
-      const descLimpia = detalle.replace(/C\.\d+\/\d+/,'').replace(/\s+/g,' ').trim();
+      let descLimpia = detalle.replace(/C\.\d+\/\d+/,'').replace(/\s+/g,' ').trim();
+      // Limpiar descripción duplicada: "TEXTO TEXTO" → "TEXTO"
+      const words = descLimpia.split(' ');
+      const half = Math.ceil(words.length / 2);
+      const firstHalf = words.slice(0, half).join(' ');
+      const secondHalf = words.slice(half).join(' ');
+      if (firstHalf === secondHalf) descLimpia = firstHalf;
+      else if (secondHalf && firstHalf.endsWith(secondHalf.split(' ')[0])) {
+        // Solapamiento parcial — quedarse con la primera mitad
+        descLimpia = firstHalf;
+      }
 
       const mapped = mapearPorDetalle(descLimpia);
 
@@ -1493,11 +1503,11 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
   const handleImport = async () => {
     setStep("importing");
     const toInsert = rows
-      .filter(r => r.incluir && r.category && r.subcat && r.fecha)
+      .filter(r => r.incluir && r.fecha)
       .map(r => ({
-        category: r.category,
-        subcat: r.subcat,
-        amount: r.ars, // puede ser negativo si es reversión
+        category: r.category || "otros",
+        subcat: r.subcat || "Sin clasificar",
+        amount: r.ars,
         moneda: "ARS",
         date: r.fecha,
         descripcion: r.desc,
