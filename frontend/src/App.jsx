@@ -1534,6 +1534,30 @@ function TarjetaImporter({ cuentas, categories, onDone }) {
 
     const { error } = await supabase.from("gastos").insert(toInsert);
     if (error) { setMsg("Error al importar: " + error.message); setStep("preview"); return; }
+
+    // Si hay conciliación con diferencia → crear línea de ajuste
+    if (conciliacion?.saldoActual) {
+      const { saldoAnterior, saldoActual, totalPagos, totalTransferencia } = conciliacion;
+      const totalTx = toInsert.reduce((s, r) => s + r.amount, 0);
+      const saldoCalculado = (saldoAnterior||0) - totalPagos + totalTransferencia + totalTx;
+      const diferencia = saldoActual - saldoCalculado;
+      if (Math.abs(diferencia) >= 10) {
+        const fechaAjuste = toInsert[toInsert.length - 1]?.date || new Date().toISOString().slice(0,10);
+        await supabase.from("gastos").insert({
+          category: "otros",
+          subcat: "Otros",
+          amount: diferencia,
+          moneda: "ARS",
+          date: fechaAjuste,
+          descripcion: `Ajuste resumen — diferencia no capturada (${fmtARS(Math.abs(diferencia))})`,
+          medio: medioNombre,
+          pagado: false,
+          recurring: false,
+          file_name: "",
+        });
+      }
+    }
+
     setMsg(`✓ ${toInsert.length} transacciones importadas`);
     setStep("done");
     setTimeout(onDone, 1500);
